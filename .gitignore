@@ -1,0 +1,9 @@
+node_modules
+dist/
+release/
+*.exe
+ffmpeg.exe
+ffprobe.exe
+.venv/
+*.lib
+*.dll

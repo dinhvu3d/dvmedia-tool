@@ -1,0 +1,74 @@
+{
+  "name": "dvmix",
+  "version": "1.0.0",
+  "description": "Video Automation Tool AV1",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on tcp:3000 && electron .\"",
+    "electron:build": "npm run build && electron-builder",
+    "start": "npm run electron:dev",
+    "dist": "npm run electron:build"
+  },
+  "author": "DVMedia",
+  "license": "ISC",
+  "dependencies": {
+    "electron-updater": "^6.1.7",
+    "ffmpeg-static": "^5.1.0",
+    "ffprobe-static": "^3.1.0",
+    "fluent-ffmpeg": "^2.1.2",
+    "lucide-react": "^0.344.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.18",
+    "concurrently": "^8.2.2",
+    "electron": "^29.1.0",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "vite": "^5.1.4",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.dvmedia.tool",
+    "productName": "DVMix",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      "./ffmpeg.exe",
+      "./ffprobe.exe", 
+      "./dedup_engine.py",
+      "./text_renderer.py"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/dvmedia.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "DVMix",
+      "artifactName": "DVMix.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "dinhvu3d",
+      "repo": "dvmedia-tool"
+    }
+  }
+}
