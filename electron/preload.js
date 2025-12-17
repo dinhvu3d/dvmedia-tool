@@ -43,7 +43,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   startDedup: (args) => ipcRenderer.invoke('backend:startDedup', args),
   stopDedup: () => ipcRenderer.invoke('backend:stopDedup'),
-  // QUAN TRỌNG: Hàm này giúp frontend nhận progress từ backend
   onDedupProgress: (cb) => {
       const listener = (e, v) => cb(v);
       ipcRenderer.on('dedup-progress', listener);
@@ -56,4 +55,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkMax: (args) => ipcRenderer.invoke('backend:checkMax', args),
   merge: (args) => ipcRenderer.invoke('backend:merge', args),
   stopMerge: () => ipcRenderer.invoke('backend:stopMerge'),
+
+  // --- NEW: SYNC VIDEO (ĐÃ FIX) ---
+  analyzeSync: (data) => ipcRenderer.invoke('backend:analyzeSync', data),
+  
+  // FIX LỖI Ở ĐÂY: Trả về hàm removeListener để React không bị crash
+  onSyncProgress: (cb) => {
+      const listener = (e, v) => cb(v);
+      ipcRenderer.on('sync-progress', listener);
+      return () => ipcRenderer.removeListener('sync-progress', listener);
+  },
+
+  // --- NEW: SYNC VIDEO (RENDER) ---
+  renderSync: (data) => ipcRenderer.invoke('backend:renderSync', data),
+  onRenderProgress: (cb) => {
+      const listener = (e, v) => cb(v);
+      ipcRenderer.on('render-progress', listener);
+      return () => ipcRenderer.removeListener('render-progress', listener);
+  },
 });

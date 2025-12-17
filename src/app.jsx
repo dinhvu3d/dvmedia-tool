@@ -178,12 +178,14 @@ const Convert9to16Tab = () => {
     const [inputPath, setInputPath] = useState(localStorage.getItem('cv_input') || ''); 
     const [outputFile, setOutputFile] = useState(localStorage.getItem('cv_output') || ''); 
     const [blurLevel, setBlurLevel] = useState('Medium'); 
-    const [resolution, setResolution] = useState(localStorage.getItem('cv_res') || '1920x1080_AV1_30'); 
+    const [resolution, setResolution] = useState(localStorage.getItem('cv_res') || '1920x1080_AV1_30');
+    const [encoder, setEncoder] = useState(localStorage.getItem('cv_encoder') || 'libx264'); 
     
     useEffect(() => localStorage.setItem('cv_mode', mode), [mode]);
     useEffect(() => localStorage.setItem('cv_input', inputPath), [inputPath]);
     useEffect(() => localStorage.setItem('cv_output', outputFile), [outputFile]);
     useEffect(() => localStorage.setItem('cv_res', resolution), [resolution]);
+    useEffect(() => localStorage.setItem('cv_encoder', encoder), [encoder]);
 
     const [logs, setLogs] = useState([]); 
     const [isRunning, setIsRunning] = useState(false); 
@@ -214,7 +216,7 @@ const Convert9to16Tab = () => {
         
         setIsRunning(true); setLogs([]); 
         if(window.electronAPI) { 
-            const res = await window.electronAPI.convert9to16({ inputType: mode, inputPath, outputFile, blurLevel, resolution }); 
+            const res = await window.electronAPI.convert9to16({ inputType: mode, inputPath, outputFile, blurLevel, resolution, encoder }); 
             alert(res.message); 
         } 
         setIsRunning(false); 
@@ -236,6 +238,15 @@ const Convert9to16Tab = () => {
                         <input type="text" value={outputFile} onChange={(e) => setOutputFile(e.target.value)} className="flex-1 bg-[#2a2e3b] border border-gray-600 text-white text-xs rounded px-3 py-2" placeholder={mode === 'folder' ? 'Leave empty to create "converted" inside input folder' : ''} /> 
                         <button onClick={handleSelectOutput} className="bg-orange-700 hover:bg-orange-600 text-white text-xs px-3 py-2 rounded font-bold">Browse</button> 
                     </div> 
+                </div>
+                <div className="mt-3">
+                    <label className="block text-gray-500 text-xs font-bold mb-1 font-mono uppercase">Render Engine:</label> 
+                    <select value={encoder} onChange={(e) => setEncoder(e.target.value)} className="w-full bg-[#2a2e3b] border border-gray-600 text-white text-xs rounded px-3 py-2 font-bold outline-none">
+                        <option value="libx264">CPU (Stable)</option>
+                        <option value="h264_nvenc">NVIDIA GPU</option>
+                        <option value="h264_amf">AMD GPU</option>
+                        <option value="h264_qsv">INTEL GPU</option>
+                    </select>
                 </div> 
             </div> 
             <div className="flex justify-center gap-4 mb-4"> 
@@ -247,8 +258,8 @@ const Convert9to16Tab = () => {
     ); 
 };
 
-// --- MERGE TAB (UPDATED UI & INTRO & STOP & AUTO SAVE & BLUR ALL) ---
-const MergeTab = () => {
+// --- MIX VIDEO TAB (OLD MERGE TAB - RENAMED & RESTORED) ---
+const MixVideoTab = () => {
     // 1. Config Init
     const defaultConfig = { 
         counts: { normal: 3, voice: 1, other: 1 }, 
@@ -258,7 +269,8 @@ const MergeTab = () => {
         otherInterval: 2, 
         otherStart: 0, 
         muteOther: false, 
-        enableOther: false 
+        enableOther: false,
+        encoder: 'libx264' // THÊM MẶC ĐỊNH
     };
 
     const [config, setConfig] = useState(() => {
@@ -416,7 +428,7 @@ const MergeTab = () => {
                         <option value="720x1280_H264_30">9:16 - 720p 30fps</option>
                     </select> 
                     
-                    {/* UPDATED CHECKBOX: WORKS FOR BOTH 16:9 AND 9:16 */}
+                    {/* CHECKBOX: AUTO CONVERT */}
                     <div 
                         className="flex items-center gap-2 mb-3 cursor-pointer group"
                         onClick={() => setConfig(prev => ({...prev, autoConvert9to16: !prev.autoConvert9to16}))}
@@ -433,6 +445,19 @@ const MergeTab = () => {
                         <button onClick={handleSelectOutput} className="bg-orange-700 hover:bg-orange-600 text-white text-xs px-3 py-2 rounded font-bold">Browse</button> 
                     </div> 
                 </div>
+                    <label className="block text-gray-500 text-xs font-bold mb-1 uppercase">Render Engine:</label> 
+                    <select 
+                        value={config.encoder || 'libx264'} 
+                        onChange={(e) => setConfig(prev => ({...prev, encoder: e.target.value}))} 
+                        className="w-full bg-[#2a2e3b] border border-gray-600 text-white rounded p-2 text-sm outline-none mb-3 font-bold"
+                    > 
+                        <option value="libx264">CPU (Stable)</option> 
+                        <option value="h264_nvenc">NVIDIA GPU</option> 
+                        <option value="h264_amf">AMD GPU</option> 
+                        <option value="h264_qsv">INTEL GPU</option> 
+                    </select> 
+                    
+                    <label className="block text-gray-500 text-xs font-bold mb-1 uppercase">Output File:</label>
 
                 <div className="bg-[#1e222b] p-3 rounded border border-gray-700 flex flex-col gap-2"> 
                     <div className="flex items-center justify-between pb-1 border-b border-gray-700 mb-1"> 
@@ -499,6 +524,200 @@ const MergeTab = () => {
     );
 };
 
+// --- NEW MERGE TAB (ONE-CLICK FLOW + GPU SUPPORT) ---
+const SyncVideoTab = () => {
+    // 1. STATE & CONFIG
+    const [inputs, setInputs] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('sv_inputs')) || { videoPath: '', audioPath: '', srtPath: '', outputPath: '' }; } 
+        catch { return { videoPath: '', audioPath: '', srtPath: '', outputPath: '' }; }
+    });
+
+    const [config, setConfig] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('sv_config')) || { bgVolume: 20, syncSpeed: true, encoder: 'libx264' }; } 
+        catch { return { bgVolume: 20, syncSpeed: true, encoder: 'libx264' }; }
+    });
+
+    // status: 'idle', 'analyzing', 'rendering'
+    const [status, setStatus] = useState('idle'); 
+    const [logs, setLogs] = useState([]); 
+    const [progress, setProgress] = useState(0); 
+
+    useEffect(() => { localStorage.setItem('sv_inputs', JSON.stringify(inputs)); }, [inputs]);
+    useEffect(() => { localStorage.setItem('sv_config', JSON.stringify(config)); }, [config]);
+
+    // LISTENERS
+    useEffect(() => {
+        let cleanSync, cleanRender;
+        if (window.electronAPI) {
+            if (window.electronAPI.onSyncProgress) {
+                cleanSync = window.electronAPI.onSyncProgress((data) => {
+                    if(data.percent) setProgress(data.percent);
+                    if(data.step) setLogs(prev => [data.step, ...prev]);
+                });
+            }
+            if (window.electronAPI.onRenderProgress) {
+                cleanRender = window.electronAPI.onRenderProgress((data) => {
+                    if(data.percent) setProgress(data.percent);
+                    if(data.step) setLogs(prev => [data.step, ...prev]);
+                });
+            }
+        }
+        return () => { if(cleanSync) cleanSync(); if(cleanRender) cleanRender(); };
+    }, []);
+
+    // HANDLERS
+    const handleSetInput = (key, value) => setInputs(prev => ({ ...prev, [key]: value }));
+    const handleSelectOutput = async () => {
+        if (window.electronAPI) {
+            const path = await window.electronAPI.saveFile();
+            if (path) handleSetInput('outputPath', path);
+        }
+    };
+
+    const handleStop = async () => {
+        if (window.electronAPI) {
+            if (status === 'analyzing') await window.electronAPI.stopAnalyzeSync(); 
+            if (status === 'rendering') await window.electronAPI.stopRenderSync();  
+        }
+        setLogs(prev => ["--- STOPPED BY USER ---", ...prev]);
+        setStatus('idle');
+        setProgress(0);
+    };
+
+    // --- ONE-CLICK PROCESS ---
+    const handleStartProcess = async () => {
+        if (!inputs.videoPath || !inputs.audioPath || !inputs.srtPath) return alert("Missing Input Files!");
+        if (!inputs.outputPath) return alert("Missing Output Path!");
+
+        setLogs(["--- STARTING PROCESS ---"]);
+        
+        // PHASE 1: ANALYZE
+        setStatus('analyzing');
+        setProgress(0);
+        let analysisResult = null;
+
+        if (window.electronAPI) {
+            const res = await window.electronAPI.analyzeSync(inputs);
+            if (res.success) {
+                analysisResult = res.data;
+                setLogs(prev => ["Analysis Done. Starting Render...", ...prev]);
+            } else {
+                setLogs(prev => [`Analysis Failed: ${res.message}`, ...prev]);
+                setStatus('idle');
+                return;
+            }
+        }
+
+        // PHASE 2: RENDER IMMEDIATELY
+        setStatus('rendering');
+        setProgress(0);
+
+        if (window.electronAPI && analysisResult) {
+            const res = await window.electronAPI.renderSync({ inputs, config, analysisData: analysisResult });
+            if (res.success) {
+                alert(res.message);
+                setLogs(prev => ["PROCESS FINISHED SUCCESSFULLY!", ...prev]);
+            } else {
+                setLogs(prev => [`Render Failed: ${res.message}`, ...prev]);
+            }
+        }
+        setStatus('idle');
+    };
+
+    // UI RENDER
+    return (
+        <div className="max-w-5xl mx-auto h-full flex flex-col pb-4">
+            <div className="flex gap-6 h-full">
+                {/* LEFT COLUMN: INPUTS */}
+                <div className="w-1/2 flex flex-col gap-4 overflow-y-auto custom-scrollbar pr-2">
+                    <div className="bg-[#1e222b] p-5 rounded border border-gray-700 shadow-lg">
+                        <div className="flex items-center gap-2 mb-4 border-b border-gray-700 pb-2"><FileVideo className="text-orange-500" size={20} /><h3 className="font-bold text-gray-200">Source Files</h3></div>
+                        <PathInput label="Original Video" placeholder="Select video..." value={inputs.videoPath} onChange={(v) => handleSetInput('videoPath', v)} isFile={true} filters={[{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'avi'] }]} />
+                        <PathInput label="Voiceover Audio" placeholder="Select audio..." value={inputs.audioPath} onChange={(v) => handleSetInput('audioPath', v)} isFile={true} filters={[{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a'] }]} />
+                        <PathInput label="Subtitle (SRT)" placeholder="Select .srt..." value={inputs.srtPath} onChange={(v) => handleSetInput('srtPath', v)} isFile={true} filters={[{ name: 'Subtitle', extensions: ['srt'] }]} />
+                    </div>
+
+                    <div className="bg-[#1e222b] p-5 rounded border border-gray-700 shadow-lg">
+                         <div className="flex items-center gap-2 mb-4 border-b border-gray-700 pb-2"><Settings className="text-blue-500" size={20} /><h3 className="font-bold text-gray-200">Configuration</h3></div>
+                        
+                        {/* GPU SELECTION */}
+                        <div className="mb-4">
+                            <label className="block text-gray-500 text-xs font-bold mb-1 font-mono uppercase">Render Engine (Hardware Accel):</label>
+                            <div className="relative">
+                                <select 
+                                    value={config.encoder || 'libx264'} 
+                                    onChange={(e) => setConfig(p => ({...p, encoder: e.target.value}))}
+                                    className="w-full bg-[#2a2e3b] border border-gray-600 text-white text-xs rounded px-3 py-2 font-bold appearance-none outline-none focus:border-orange-500"
+                                >
+                                    <option value="libx264">CPU (Slow - High Quality)</option>
+                                    <option value="h264_nvenc">NVIDIA GPU (Fast - NVENC)</option>
+                                    <option value="h264_amf">AMD GPU (Fast - AMF)</option>
+                                    <option value="h264_qsv">INTEL GPU (Fast - QuickSync)</option>
+                                </select>
+                                <div className="absolute right-3 top-2.5 pointer-events-none text-gray-400"><Cpu size={14}/></div>
+                            </div>
+                            <p className="text-[9px] text-gray-500 mt-1">* Ensure your hardware supports the selected encoder.</p>
+                        </div>
+
+                        <div className="mb-6 flex items-center justify-between bg-[#15171e] p-3 rounded border border-gray-600">
+                            <div><span className="text-sm font-bold text-gray-300 block">Sync Speed</span><span className="text-[10px] text-gray-500">Auto speed up/slow down video to match audio</span></div>
+                            <div onClick={() => setConfig(p => ({...p, syncSpeed: !p.syncSpeed}))} className={`w-12 h-6 rounded-full p-1 cursor-pointer transition-colors ${config.syncSpeed ? 'bg-green-600' : 'bg-gray-600'}`}><div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${config.syncSpeed ? 'translate-x-6' : 'translate-x-0'}`}></div></div>
+                        </div>
+
+                        <div className="mb-4">
+                            <div className="flex justify-between mb-2"><span className="text-xs font-bold text-gray-400 uppercase">Background Video Volume</span><span className="text-xs font-bold text-orange-500">{config.bgVolume}%</span></div>
+                            <input type="range" min="0" max="100" value={config.bgVolume} onChange={(e) => setConfig(p => ({...p, bgVolume: parseInt(e.target.value)}))} className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-orange-500" />
+                        </div>
+                    </div>
+                </div>
+
+                {/* RIGHT COLUMN: OUTPUT & PROCESS */}
+                <div className="w-1/2 flex flex-col gap-4">
+                    <div className="bg-[#1e222b] p-5 rounded border border-gray-700 shadow-lg flex-1 flex flex-col">
+                        <div className="flex items-center gap-2 mb-4 border-b border-gray-700 pb-2"><Download className="text-green-500" size={20} /><h3 className="font-bold text-gray-200">Output & Process</h3></div>
+                        <div className="mb-6">
+                            <label className="block text-gray-500 text-xs font-bold mb-1 font-mono uppercase">Target Output File:</label>
+                            <div className="flex gap-2">
+                                <input type="text" value={inputs.outputPath} onChange={(e) => handleSetInput('outputPath', e.target.value)} className="flex-1 bg-[#2a2e3b] border border-gray-600 text-white text-xs rounded px-3 py-2" placeholder="e.g. D:\Result\FinalVideo.mp4"/>
+                                <button onClick={handleSelectOutput} className="bg-orange-700 hover:bg-orange-600 text-white text-xs px-4 py-2 rounded font-bold">Browse</button>
+                            </div>
+                        </div>
+                        
+                        {/* PROGRESS BAR */}
+                        {status !== 'idle' && (
+                            <div className="mb-4">
+                                <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+                                    <span className="uppercase font-bold text-blue-400">{status === 'analyzing' ? 'Analyzing...' : 'Rendering...'}</span>
+                                    <span>{progress}%</span>
+                                </div>
+                                <div className="w-full bg-gray-700 h-2 rounded-full overflow-hidden">
+                                    <div className={`h-full transition-all duration-300 ${status === 'analyzing' ? 'bg-blue-500' : 'bg-green-500'}`} style={{ width: `${progress}%` }}></div>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="bg-[#15171e] flex-1 rounded border border-gray-700 mb-4 p-2 font-mono text-xs text-gray-400 relative">
+                            <div className="absolute inset-0 overflow-y-auto custom-scrollbar p-2">
+                                {logs.length === 0 ? <div className="h-full flex items-center justify-center text-gray-600 italic">Ready to start...</div> : logs.map((l, i) => <div key={i} className="mb-1">{l}</div>)}
+                            </div>
+                        </div>
+
+                        {status !== 'idle' ? (
+                            <button onClick={handleStop} className="w-full bg-red-600 hover:bg-red-700 text-white py-4 rounded font-bold text-sm uppercase tracking-wider shadow-lg flex items-center justify-center gap-2 animate-pulse">
+                                <Ban size={20} /> STOP PROCESS
+                            </button>
+                        ) : (
+                            <button onClick={handleStartProcess} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded font-bold text-sm uppercase tracking-wider shadow-lg flex items-center justify-center gap-2 transition-all">
+                                <Zap size={20} /> Start Process (Analyze & Render)
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // --- SETTINGS TAB (UPDATED V1.0.0) ---
 const SettingsTab = () => {
     return (
@@ -558,7 +777,7 @@ const SettingsTab = () => {
     );
 };
 
-// --- MAIN APP ---
+// --- MAIN APP (MENU STRUCTURE) ---
 export default function App() {
   const [activeTab, setActiveTab] = useState('rename');
   const [isActivated, setIsActivated] = useState(false); 
@@ -581,13 +800,24 @@ export default function App() {
   const handleUpdateConfirm = () => { setIsUpdating(true); if(window.electronAPI) window.electronAPI.updaterDownload(); }; 
   const handleUpdateClose = () => { setUpStatus('idle'); };
 
-  const menuItems = [ { id: 'rename', label: 'Rename', icon: Edit3 }, { id: 'dedup', label: 'Dedup', icon: Filter }, { id: 'convert-9-16', label: 'Convert 9:16', icon: LayoutTemplate }, { id: 'ghep-video', label: 'Merge', icon: Video }, { id: 'settings', label: 'Settings', icon: Settings } ];
+  // UPDATED MENU ITEMS
+  const menuItems = [ 
+      { id: 'rename', label: 'Rename', icon: Edit3 }, 
+      { id: 'dedup', label: 'Dedup', icon: Filter }, 
+      { id: 'convert-9-16', label: 'Convert 9:16', icon: LayoutTemplate }, 
+      { id: 'mix-video', label: 'Mix Video', icon: Video }, // Changed from 'ghep-video'
+      { id: 'sync-video', label: 'Merge', icon: Zap }, // New Tab
+      { id: 'settings', label: 'Settings', icon: Settings } 
+  ];
+
+  // UPDATED RENDER
   const renderContent = () => { 
       switch (activeTab) { 
           case 'rename': return <RenameTab />; 
           case 'dedup': return <DedupTab />; 
           case 'convert-9-16': return <Convert9to16Tab />; 
-          case 'ghep-video': return <MergeTab />; 
+          case 'mix-video': return <MixVideoTab />; // Restored Logic
+          case 'sync-video': return <SyncVideoTab />; // Placeholder
           case 'settings': return <SettingsTab />; 
           default: return null; 
       } 

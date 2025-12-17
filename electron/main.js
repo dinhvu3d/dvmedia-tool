@@ -288,40 +288,66 @@ ipcMain.handle('backend:startDedup', async (event, { folderPath }) => {
 // --- CONVERT 9:16 ---
 let isStopConvert = false;
 ipcMain.handle('backend:stopConvert9to16', () => { isStopConvert = true; return {success:true}; });
-ipcMain.handle('backend:convert9to16', async (e, { inputType, inputPath, outputFile, blurLevel, resolution }) => {
+ipcMain.handle('backend:convert9to16', async (e, { inputType, inputPath, outputFile, blurLevel, resolution, encoder }) => {
     try {
         isStopConvert = false;
         const [resString, _, fps] = resolution.split('_'); 
         const [targetW, targetH] = resString.split('x');
+        
+        // Lấy cấu hình GPU (Chỉ dùng phần codec để encode, không dùng hw_dec để tránh lỗi filter)
+        const { codec } = getEncoderConfig(encoder || 'libx264');
+
         const complexFilter = [
             `[0:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},gblur=sigma=80[bg]`,
             `[0:v]scale=-1:${targetH}:flags=lanczos[fg]`,
             `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1`
         ];
 
+        // SINGLE MODE
         if(inputType === 'file') {
-            sendLog(`[CONVERT] Processing single file...`);
-            await new Promise((resolve, reject) => fluentFfmpeg(inputPath)
-                .complexFilter(complexFilter)
-                .videoCodec('libx264').addOption('-preset','slow').addOption('-crf','18').addOption('-pix_fmt','yuv420p').addOption('-r', fps)
-                .save(outputFile).on('end', resolve).on('error', reject));
+            sendLog(`[CONVERT] Processing single file with ${encoder || 'CPU'}...`);
+            await new Promise((resolve, reject) => {
+                const cmd = fluentFfmpeg(inputPath)
+                    .complexFilter(complexFilter)
+                    // Thay thế .videoCodec(...) bằng .outputOptions(codec)
+                    .outputOptions(codec) 
+                    .addOption('-pix_fmt', 'yuv420p')
+                    .addOption('-r', fps);
+                
+                cmd.save(outputFile)
+                   .on('end', resolve)
+                   .on('error', reject);
+            });
             return { success: true, message: "Convert Done!" };
-        } else {
+        } 
+        
+        // BATCH MODE
+        else {
             const files = getFilesSafeFull(inputPath).filter(f => ['.mp4','.mov','.mkv'].includes(path.extname(f)));
             if (files.length === 0) return { success: false, message: "No video files found." };
             if(!fs.existsSync(outputFile)) fs.mkdirSync(outputFile, {recursive:true});
-            sendLog(`[CONVERT] Found ${files.length} files. Saving to: ${outputFile}`);
+            
+            sendLog(`[CONVERT] Found ${files.length} files. Engine: ${encoder || 'CPU'}`);
+            
             for(let i=0; i<files.length; i++) {
                 if(isStopConvert) break;
                 const file = files[i];
                 const outName = path.join(outputFile, path.basename(file));
                 sendLog(`[${i+1}/${files.length}] Converting: ${path.basename(file)}`);
                 try {
-                    await new Promise((resolve, reject) => fluentFfmpeg(file)
-                        .complexFilter(complexFilter)
-                        .videoCodec('libx264').addOption('-preset','veryfast').addOption('-crf','20').addOption('-r', fps) 
-                        .save(outName).on('end', resolve).on('error', reject));
-                } catch(err) { sendLog(`[ERR] Failed ${path.basename(file)}: ${err.message}`); }
+                    await new Promise((resolve, reject) => {
+                        const cmd = fluentFfmpeg(file)
+                            .complexFilter(complexFilter)
+                            .outputOptions(codec) // GPU Config
+                            .addOption('-r', fps);
+                        
+                        cmd.save(outName)
+                           .on('end', resolve)
+                           .on('error', reject);
+                    });
+                } catch(err) {
+                    sendLog(`[ERR] Failed ${path.basename(file)}: ${err.message}`);
+                }
             }
             return { success: true, message: "Batch Convert Finished." };
         }
@@ -349,31 +375,30 @@ ipcMain.handle('backend:merge', async (e, { inputDirs, outputFile, config, overl
         const [targetW, targetH] = resString.split('x');
         const isVerticalOutput = parseInt(targetW) < parseInt(targetH); 
         
+        // Lấy cấu hình Encoder từ config (hoặc mặc định CPU)
+        const encoderName = config.encoder || 'libx264';
+        const { codec } = getEncoderConfig(encoderName);
+        sendLog(`[MERGE] Engine: ${encoderName} (Hybrid Mode)`);
+
         // --- 1. OVERLAY SETUP ---
         let overlayPngPath = null;
         if (overlayConfig && overlayConfig.enabled && (overlayConfig.text1 || overlayConfig.text2)) {
             sendLog("[MERGE] Generating Text Overlay...");
-            
-            const priorityFonts = [ overlayConfig.fontPath, "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/malgun.ttf", "C:/Windows/Fonts/meiryo.ttc", "C:/Windows/Fonts/seguiemj.ttf", "C:/Windows/Fonts/arial.ttf" ];
+            const priorityFonts = [ overlayConfig.fontPath, "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/arial.ttf" ];
             let finalFont = null;
             for (const f of priorityFonts) { if (f && fs.existsSync(f)) { finalFont = f; break; } }
             overlayConfig.fontPath = finalFont;
 
             const scriptPath = resolveResource('text_renderer.py');
-            
             overlayPngPath = path.join(workDir, 'overlay.png');
             const pyPayload = { ...overlayConfig, width: parseInt(targetW), height: parseInt(targetH), position: isVerticalOutput ? 'top_right' : 'default' };
             
             await new Promise((resolve) => {
-                if (!fs.existsSync(scriptPath)) {
-                    sendLog(`[WARN] Text Renderer script not found at ${scriptPath}`);
-                    resolve(); return;
-                }
+                if (!fs.existsSync(scriptPath)) { resolve(); return; }
                 const pyEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
                 const py = spawn('python', [scriptPath, JSON.stringify(pyPayload), overlayPngPath], { env: pyEnv });
-                py.stderr.on('data', (d) => sendLog(`[PY-ERR] ${d.toString()}`));
                 py.on('close', resolve);
-                py.on('error', (err) => { sendLog(`[PY-FAIL] ${err.message}`); overlayPngPath = null; resolve(); });
+                py.on('error', () => { overlayPngPath = null; resolve(); });
             });
             if (!fs.existsSync(overlayPngPath)) overlayPngPath = null;
         }
@@ -392,27 +417,20 @@ ipcMain.handle('backend:merge', async (e, { inputDirs, outputFile, config, overl
         const tempSegments = [];
         const usedFiles = new Set();
 
-        // --- 2. NORMALIZE VIDEO (NEW UNIVERSAL BLUR LOGIC) ---
+        // --- 2. NORMALIZE VIDEO (GPU ENABLED) ---
         const normalizeVideo = async (filePath, index, shouldMute, isIntro = false) => {
             if (isStopMerge) return null;
             usedFiles.add(filePath);
+            const info = await getVideoInfo(filePath);
+            const isVerticalInput = info.width < info.height;
             const tempPath = path.join(workDir, `seg_${index}.mp4`);
             
             let complexFilter = [];
             let baseFilter = '';
             
-            // LOGIC MỚI: Nếu tích chọn "Auto Fill Background (Blur)"
             if (config.autoConvert9to16) {
-                // Bộ lọc này hoạt động cho cả 2 trường hợp:
-                // 1. Input Dọc -> Output Ngang (Blur 2 bên)
-                // 2. Input Ngang -> Output Dọc (Blur Trên/Dưới)
-                // Nguyên lý: 
-                // [bg] scale tăng lên để lấp đầy khung hình -> Crop -> Blur
-                // [fg] scale giảm xuống để nằm gọn trong khung hình (giữ tỷ lệ)
-                // overlay: đặt fg lên giữa bg
                 baseFilter = `[0:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},gblur=sigma=80[bg];[0:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1`;
             } else {
-                // Logic cũ: Thêm viền đen (Pad) nếu tỷ lệ không khớp
                 baseFilter = `[0:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
             }
 
@@ -424,8 +442,11 @@ ipcMain.handle('backend:merge', async (e, { inputDirs, outputFile, config, overl
             await new Promise((resolve, reject) => {
                 const cmd = fluentFfmpeg(filePath);
                 if (!isIntro && overlayPngPath) cmd.input(overlayPngPath);
+                
                 cmd.complexFilter(complexFilter)
-                    .videoCodec('libx264').addOption('-preset', 'veryfast').addOption('-crf', '20').addOption('-r', fps)
+                    // ÁP DỤNG GPU CODEC TẠI ĐÂY
+                    .outputOptions(codec)
+                    .addOption('-r', fps)
                     .audioCodec('aac').addOption('-ar', '44100').addOption('-ac', '2');
                 
                 if (shouldMute) cmd.audioFilters('volume=0');
@@ -491,4 +512,348 @@ ipcMain.handle('backend:merge', async (e, { inputDirs, outputFile, config, overl
         }
         return { success: true, message: "Merge Completed!" };
     } catch(err) { removeDir(workDir); return { success: false, message: err.message }; }
+});
+
+// --- SYNC VIDEO BACKEND ---
+let syncProcess = null;
+
+ipcMain.handle('backend:stopAnalyzeSync', () => {
+    if (syncProcess) { syncProcess.kill(); syncProcess = null; return { success: true }; }
+    return { success: false };
+});
+
+ipcMain.handle('backend:analyzeSync', async (e, { videoPath, audioPath, srtPath }) => {
+    try {
+        const tempId = Date.now();
+        const tempDir = path.join(app.getPath('userData'), `sync_temp_${tempId}`);
+        ensureDir(tempDir);
+
+        // FIX PATH: Tìm file sync_engine.py
+        const scriptPath = resolveResource('sync_engine.py');
+        if (!fs.existsSync(scriptPath)) return { success: false, message: "Engine sync_engine.py not found!" };
+
+        sendLog(`[SYNC] Starting analysis...`);
+        
+        return new Promise((resolve) => {
+            let isResolved = false;
+            const pythonEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+
+            // Gọi Python: script video audio srt temp_dir ffmpeg_path
+            syncProcess = spawn('python', ['-u', scriptPath, videoPath, audioPath, srtPath, tempDir, ffmpegPath], { env: pythonEnv });
+
+            syncProcess.stdout.on('data', (data) => {
+                const lines = data.toString().split('\n');
+                lines.forEach(line => {
+                    const trimmed = line.trim();
+                    if (!trimmed) return;
+                    try {
+                        const msg = JSON.parse(trimmed);
+                        if (msg.type === 'progress') {
+                            // Gửi tiến trình về UI
+                            if(mainWindow) mainWindow.webContents.send('sync-progress', msg);
+                        }
+                        else if (msg.type === 'error') {
+                            sendLog(`[ERR] ${msg.message}`);
+                            if (!isResolved) { isResolved = true; resolve({ success: false, message: msg.message }); }
+                        }
+                        else if (msg.type === 'done') {
+                            sendLog(`[SYNC] ${msg.message}`);
+                            if (!isResolved) { 
+                                isResolved = true; 
+                                syncProcess = null;
+                                // Trả về kết quả phân tích + đường dẫn tempDir để dùng cho bước sau
+                                resolve({ success: true, data: { ...msg, tempDir } }); 
+                            }
+                        }
+                    } catch (e) { sendLog(`[RAW] ${trimmed}`); }
+                });
+            });
+
+            syncProcess.stderr.on('data', (d) => sendLog(`[PY-ERR] ${d.toString()}`));
+            
+            syncProcess.on('close', (code) => {
+                syncProcess = null;
+                if (!isResolved) {
+                    isResolved = true;
+                    if (code === 0) resolve({ success: false, message: "Process finished without data." });
+                    else resolve({ success: false, message: `Exited with code ${code}` });
+                }
+            });
+        });
+
+    } catch (err) { return { success: false, message: err.message }; }
+});
+
+// ==========================================
+// 8. SYNC VIDEO RENDER ENGINE (OPTIMIZED GPU & LOGIC)
+// ==========================================
+
+// Helper: Chạy lệnh FFmpeg
+const runFfmpegCommand = (args) => {
+    return new Promise((resolve, reject) => {
+        const cmd = spawn(ffmpegPath, args);
+        cmd.on('close', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`FFmpeg exited with code ${code}`));
+        });
+        cmd.on('error', (err) => reject(err));
+    });
+};
+
+// Helper: Atempo Chain
+const buildAtempoChain = (speed) => {
+    if (Math.abs(speed - 1.0) < 0.01) return null;
+    let chain = [];
+    let s = speed;
+    while (s > 2.0) { chain.push("atempo=2.0"); s /= 2.0; }
+    while (s < 0.5) { chain.push("atempo=0.5"); s /= 0.5; }
+    chain.push(`atempo=${s}`);
+    return chain.join(',');
+};
+
+// Helper: Lấy tham số GPU tối ưu (Decoding + Encoding)
+const getEncoderConfig = (encoderName) => {
+    switch (encoderName) {
+        case 'h264_nvenc': // NVIDIA
+            return {
+                // Input Flags: Kích hoạt giải mã bằng GPU (QUAN TRỌNG ĐỂ TĂNG TỐC)
+                hw_dec: ['-hwaccel', 'cuda'], 
+                // Output Flags: P4 là preset trung bình (nhanh hơn P6), constqp 22 giữ chất lượng tốt
+                codec: ['-c:v', 'h264_nvenc', '-preset', 'p6', '-rc', 'constqp', '-cq', '14', '-spatial-aq', '1']
+            };
+        case 'h264_amf': // AMD
+            return {
+                hw_dec: ['-hwaccel', 'dxva2'], // Hoặc d3d11va
+                codec: ['-c:v', 'h264_amf', '-usage', 'transcoding', '-quality', 'balanced']
+            };
+        case 'h264_qsv': // INTEL
+            return {
+                hw_dec: ['-hwaccel', 'qsv'],
+                codec: ['-c:v', 'h264_qsv', '-global_quality', '22', '-look_ahead', '0']
+            };
+        default: // CPU
+            return {
+                hw_dec: [],
+                codec: ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '14']
+            };
+    }
+};
+
+// 1. BUILD GAP SEGMENT
+const buildGapSegment = async (inputVideo, segIndex, segStart, segEnd, workDir, bgVolume, hasAudioStream, encoderName) => {
+    const segDuration = Math.max(0.0, segEnd - segStart);
+    if (segDuration < 0.1) return null;
+
+    const segVideoOut = path.join(workDir, `seg_gap_${String(segIndex).padStart(4, '0')}.mp4`);
+    
+    // Configs
+    const volNum = Number(bgVolume);
+    const safeVol = isNaN(volNum) ? 0.3 : Math.max(0.0, volNum / 100.0);
+    const { hw_dec, codec } = getEncoderConfig(encoderName);
+
+    // Filters
+    const vf = 'fps=30,format=yuv420p,setpts=PTS';
+    let filterComplex = '';
+
+    if (hasAudioStream) {
+        const aChain = `volume=${safeVol},aresample=48000:async=1,aformat=sample_fmts=fltp:channel_layouts=stereo`;
+        filterComplex = `[0:v]${vf}[vout];[0:a]${aChain}[aout]`;
+    } else {
+        filterComplex = `[0:v]${vf}[vout];anullsrc=r=48000:cl=stereo,atrim=duration=${segDuration.toFixed(3)}[aout]`;
+    }
+
+    const args = [
+        '-y',
+        ...hw_dec, // Thêm cờ giải mã phần cứng trước -i
+        '-ss', `${segStart.toFixed(6)}`, '-to', `${segEnd.toFixed(6)}`,
+        '-i', inputVideo,
+        '-filter_complex', filterComplex,
+        '-map', '[vout]', '-map', '[aout]',
+        ...codec,  // Thêm cờ mã hóa phần cứng
+        '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2',
+        segVideoOut
+    ];
+
+    await runFfmpegCommand(args);
+    return segVideoOut;
+};
+
+// 2. BUILD LINE SEGMENT
+const buildLineSegment = async (inputVideo, segIndex, segStart, segEnd, voicePath, voiceDuration, workDir, bgVolume, syncSpeed, hasAudioStream, encoderName) => {
+    const segDuration = Math.max(0.0, segEnd - segStart);
+    if (segDuration < 0.1 || voiceDuration < 0.1) {
+        return buildGapSegment(inputVideo, segIndex, segStart, segEnd, workDir, bgVolume, hasAudioStream, encoderName);
+    }
+
+    const segVideoOut = path.join(workDir, `seg_line_${String(segIndex).padStart(4, '0')}.mp4`);
+    
+    // Configs
+    const volNum = Number(bgVolume);
+    const safeVol = isNaN(volNum) ? 0.3 : Math.max(0.0, volNum / 100.0);
+    const targetDur = voiceDuration;
+    const { hw_dec, codec } = getEncoderConfig(encoderName);
+
+    // Logic Sync Speed
+    let shouldAdjustSpeed = syncSpeed || (targetDur > segDuration);
+    let ptsFilter = shouldAdjustSpeed 
+        ? `setpts=${(Math.max(0.001, targetDur / segDuration)).toFixed(6)}*PTS`
+        : `setpts=PTS`;
+
+    const vfBase = 'fps=30,format=yuv420p';
+    const a1Base = 'aresample=48000:async=1,aformat=sample_fmts=fltp:channel_layouts=stereo';
+
+    let filterComplex = '';
+
+    if (hasAudioStream) {
+        const a0Base = `volume=${safeVol},aresample=48000:async=1,aformat=sample_fmts=fltp:channel_layouts=stereo`;
+        let a0 = a0Base;
+        if (shouldAdjustSpeed) {
+            const fAudio = Math.max(0.001, segDuration / targetDur); 
+            const atempoChain = buildAtempoChain(fAudio);
+            if (atempoChain) a0 += `,${atempoChain}`;
+        }
+        filterComplex = `[0:v]${vfBase},${ptsFilter}[vout];[0:a]${a0},apad[a0p];[1:a]${a1Base},apad[a1p];[a0p][a1p]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`;
+    } else {
+        filterComplex = `[0:v]${vfBase},${ptsFilter}[vout];[1:a]${a1Base}[aout]`;
+    }
+
+    const args = [
+        '-y',
+        ...hw_dec, // Thêm cờ giải mã phần cứng
+        '-ss', `${segStart.toFixed(6)}`, '-to', `${segEnd.toFixed(6)}`,
+        '-i', inputVideo,
+        '-i', voicePath,
+        '-filter_complex', filterComplex,
+        '-map', '[vout]', '-map', '[aout]',
+        ...codec, // Thêm cờ mã hóa phần cứng
+        '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2',
+        '-shortest',
+        segVideoOut
+    ];
+
+    await runFfmpegCommand(args);
+    return segVideoOut;
+};
+
+// HANDLER CHÍNH
+let renderProcessStop = false;
+ipcMain.handle('backend:stopRenderSync', () => { renderProcessStop = true; return {success: true}; });
+
+ipcMain.handle('backend:renderSync', async (e, { inputs, config, analysisData }) => {
+    renderProcessStop = false;
+    const { videoPath, outputPath } = inputs;
+    const { audio_segments, tempDir } = analysisData; 
+    const { bgVolume, syncSpeed, encoder } = config;
+
+    const encoderName = encoder || 'libx264';
+    sendLog(`[RENDER] Engine: ${encoderName} (HW Decode + Encode)`);
+
+    const renderDir = path.join(tempDir, 'render_parts');
+    ensureDir(renderDir);
+
+    try {
+        const vidInfo = await new Promise(r => fluentFfmpeg.ffprobe(videoPath, (err, data) => r(data)));
+        const videoDur = vidInfo.format.duration;
+        const hasAudioStream = vidInfo.streams.some(s => s.codec_type === 'audio');
+        
+        // --- LOGIC SYNC OPTIMIZED (OVERLAP PROTECTION) ---
+        // Sắp xếp audio
+        const sortedLines = [...audio_segments].sort((a,b) => a.start - b.start);
+        
+        const timeline = []; 
+        let cur = 0.0; // Con trỏ thời gian video
+
+        for (const ln of sortedLines) {
+            // FIX QUAN TRỌNG: Chống lùi thời gian (Overlap)
+            // Nếu dòng SRT tiếp theo bắt đầu (ln.start) nhỏ hơn vị trí hiện tại (cur),
+            // Ta buộc phải đẩy nó về cur để tránh lỗi video lặp lại.
+            let safeStart = Math.max(cur, ln.start);
+            
+            // Giới hạn trong độ dài video
+            const s = Math.max(0.0, Math.min(safeStart, videoDur)); 
+            const e = Math.max(0.0, Math.min(ln.end, videoDur)); 
+            
+            if (e <= s) continue; // Bỏ qua nếu lỗi thời gian
+            
+            // Nếu có khoảng trống từ 'cur' đến 's' -> Tạo GAP
+            if (s > cur) {
+                timeline.push({ type: 'gap', start: cur, end: s });
+            }
+
+            // Tạo LINE
+            timeline.push({ type: 'line', start: s, end: e, ref: ln }); 
+            cur = e;
+        }
+
+        // Tạo GAP cuối cùng nếu chưa hết video
+        if (cur < videoDur) {
+            timeline.push({ type: 'gap', start: cur, end: videoDur });
+        }
+
+        sendLog(`[RENDER] Timeline optimized: ${timeline.length} segments.`);
+
+        // --- RENDER LOOP ---
+        const segPaths = [];
+        const totalSegs = timeline.length;
+
+        for(let i=0; i<totalSegs; i++) {
+            if (renderProcessStop) throw new Error("Stopped by user.");
+            
+            const item = timeline[i];
+            const msg = item.type === 'line' ? `Voice: ${item.ref.text.substring(0, 15)}...` : `Gap`;
+            
+            if(mainWindow) mainWindow.webContents.send('render-progress', { 
+                percent: Math.round((i / totalSegs) * 100), 
+                step: `Rendering ${i+1}/${totalSegs}: ${msg}` 
+            });
+
+            try {
+                let p = '';
+                if (item.type === 'gap') {
+                    p = await buildGapSegment(videoPath, i, item.start, item.end, renderDir, bgVolume, hasAudioStream, encoderName);
+                } else {
+                    p = await buildLineSegment(
+                        videoPath, 
+                        i, 
+                        item.start, 
+                        item.end, 
+                        item.ref.file_path, 
+                        item.ref.duration, 
+                        renderDir, 
+                        bgVolume, 
+                        syncSpeed, 
+                        hasAudioStream,
+                        encoderName
+                    );
+                }
+                if (p) segPaths.push(p);
+            } catch (err) {
+                sendLog(`[ERR] Seg ${i} Fail: ${err.message}`);
+            }
+        }
+
+        // --- CONCAT FINAL ---
+        if (segPaths.length === 0) throw new Error("No segments rendered.");
+        
+        if(mainWindow) mainWindow.webContents.send('render-progress', { percent: 99, step: "Finalizing..." });
+        
+        const listPath = path.join(renderDir, 'concat_list.txt');
+        const fileContent = segPaths.map(f => `file '${f.replace(/\\/g, '/')}'`).join('\n');
+        fs.writeFileSync(listPath, fileContent);
+
+        await runFfmpegCommand([
+            '-y', '-f', 'concat', '-safe', '0',
+            '-i', listPath,
+            '-c', 'copy',
+            outputPath
+        ]);
+
+        if(mainWindow) mainWindow.webContents.send('render-progress', { percent: 100, step: "Done!" });
+        removeDir(tempDir);
+
+        return { success: true, message: "Done! Saved to: " + path.basename(outputPath) };
+
+    } catch (err) {
+        return { success: false, message: err.message };
+    }
 });

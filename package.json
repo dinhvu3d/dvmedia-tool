@@ -1,6 +1,6 @@
 {
   "name": "dvmix",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Video Automation Tool AV1",
   "main": "electron/main.js",
   "scripts": {
@@ -45,7 +45,8 @@
       "./ffmpeg.exe",
       "./ffprobe.exe", 
       "./dedup_engine.py",
-      "./text_renderer.py"
+      "./text_renderer.py",
+      "./sync_engine.py" 
     ],
     "directories": {
       "buildResources": "build",
