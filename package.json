@@ -64,7 +64,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "DVMix",
-      "artifactName": "DVMix.${ext}"
+      "artifactName": "${productName} Setup ${version}.${ext}" 
     },
     "publish": {
       "provider": "github",
