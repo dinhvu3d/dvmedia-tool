@@ -11,9 +11,20 @@ const http = require('http');
 // ==========================================
 // 1. SETUP & CONFIGURATION
 // ==========================================
+// Hàm hỗ trợ tìm file script (Python/Exe) bất kể Dev hay Production
+const resolveResource = (fileName) => {
+    if (app.isPackaged) {
+        // Khi đóng gói: Tìm trong folder resources (cùng cấp với file exe)
+        return path.join(process.resourcesPath, fileName);
+    }
+    // Khi chạy code: Tìm ở thư mục gốc (lên 1 cấp từ electron/)
+    return path.join(__dirname, '../', fileName);
+};
+
 let ffmpegPath;
-const buildFfmpeg = path.join(process.resourcesPath, 'ffmpeg.exe');
+const buildFfmpeg = resolveResource('ffmpeg.exe');
 const localFfmpeg = path.join(__dirname, '../ffmpeg.exe');
+
 if (fs.existsSync(localFfmpeg)) ffmpegPath = localFfmpeg;
 else if (fs.existsSync(buildFfmpeg)) ffmpegPath = buildFfmpeg;
 else ffmpegPath = require('ffmpeg-static').replace('app.asar', 'app.asar.unpacked');
@@ -69,43 +80,18 @@ function createWindow() {
   });
   if (!app.isPackaged) mainWindow.loadURL('http://localhost:3000');
   else mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+  
+  // Updater Events
   autoUpdater.autoDownload = false;
-  // 1. Khi đang kiểm tra
-  autoUpdater.on('checking-for-update', () => {
-      if(mainWindow) mainWindow.webContents.send('update-status', { status: 'checking', msg: 'Checking for updates...' });
-  });
-
-  // 2. Khi PHÁT HIỆN bản mới (Quan trọng nhất: Bắn tín hiệu để React hiện Popup)
-  autoUpdater.on('update-available', (info) => {
-      if(mainWindow) mainWindow.webContents.send('update-status', { status: 'available', msg: `Version ${info.version} is available!` });
-  });
-
-  // 3. Khi không có gì mới
-  autoUpdater.on('update-not-available', () => {
-      if(mainWindow) mainWindow.webContents.send('update-status', { status: 'idle', msg: 'Latest version installed.' });
-  });
-
-  // 4. Khi gặp lỗi check
-  autoUpdater.on('error', (err) => {
-      if(mainWindow) mainWindow.webContents.send('update-status', { status: 'error', msg: 'Update error: ' + err.message });
-  });
-
-  // 5. Khi người dùng bấm Update -> Đang tải về
-  autoUpdater.on('download-progress', (progressObj) => {
-      let log_message = "Download speed: " + progressObj.bytesPerSecond;
-      let percent = progressObj.percent;
-      if(mainWindow) mainWindow.webContents.send('update-status', { status: 'downloading', msg: `Downloading... ${Math.round(percent)}%` });
-  });
-
-  // 6. Khi tải xong -> Hiện nút "Install Now"
-  autoUpdater.on('update-downloaded', (info) => {
-      if(mainWindow) mainWindow.webContents.send('update-status', { status: 'downloaded', msg: 'Update downloaded. Restart to install?' });
-  });
+  autoUpdater.on('checking-for-update', () => { if(mainWindow) mainWindow.webContents.send('update-status', { status: 'checking', msg: 'Checking for updates...' }); });
+  autoUpdater.on('update-available', (info) => { if(mainWindow) mainWindow.webContents.send('update-status', { status: 'available', msg: `Version ${info.version} is available!` }); });
+  autoUpdater.on('update-not-available', () => { if(mainWindow) mainWindow.webContents.send('update-status', { status: 'idle', msg: 'Latest version installed.' }); });
+  autoUpdater.on('error', (err) => { if(mainWindow) mainWindow.webContents.send('update-status', { status: 'error', msg: 'Update error: ' + err.message }); });
+  autoUpdater.on('download-progress', (progressObj) => { if(mainWindow) mainWindow.webContents.send('update-status', { status: 'downloading', msg: `Downloading... ${Math.round(progressObj.percent)}%` }); });
+  autoUpdater.on('update-downloaded', (info) => { if(mainWindow) mainWindow.webContents.send('update-status', { status: 'downloaded', msg: 'Update downloaded. Restart to install?' }); });
 }
 app.whenReady().then(createWindow);
-app.on('window-all-closed', () => {
-    app.quit();
-});
+app.on('window-all-closed', () => { app.quit(); });
 
 // ==========================================
 // 5. IPC HANDLERS - CORE & UTILS
@@ -138,7 +124,6 @@ ipcMain.handle('dialog:openFile', async (e, filters) => {
     return r.canceled ? null : r.filePaths[0]; 
 });
 ipcMain.handle('dialog:saveFile', async (e, options) => { 
-    // Cho phép options để lọc file output
     const opts = options || { title: 'Save File', defaultPath: 'Output.mp4', filters: [{ name: 'Movies', extensions: ['mp4'] }] };
     const r = await dialog.showSaveDialog(mainWindow, opts); 
     return r.canceled ? null : r.filePath; 
@@ -164,7 +149,6 @@ ipcMain.handle('backend:deleteShort', async (e, { targetDir, minDuration }) => {
         
         const total = allFiles.length;
         sendLog(`[DELETE] Starting scan ${total} files...`);
-
         const BATCH_SIZE = 5;
         for (let i = 0; i < total; i += BATCH_SIZE) {
             if (isStopDel) break;
@@ -191,8 +175,6 @@ ipcMain.handle('backend:rename', async (e, { inputDir, outputDir }) => {
 ipcMain.handle('backend:checkMax', async (e, { inputDirs, config }) => {
     try {
         const { normal, voice, other } = inputDirs;
-        
-        // 1. Get all files
         const filesN = getFilesSafeFull(normal);
         const filesV = getFilesSafeFull(voice);
         const filesO = getFilesSafeFull(other);
@@ -201,18 +183,15 @@ ipcMain.handle('backend:checkMax', async (e, { inputDirs, config }) => {
             return { success: false, message: "No input files found.", maxCount: 0 };
         }
 
-        // 2. Calculate average duration (Sample first 5 files for speed)
         const avgN = await getAverageDuration(filesN) || 5; 
         const avgV = await getAverageDuration(filesV) || 5;
         const avgO = await getAverageDuration(filesO) || 5;
 
-        // 3. Simulate ONE video build to find resource usage
         const targetDur = config.duration * 60;
         const otherInterval = (config.otherInterval || 2) * 60;
         let nextOtherTime = (config.otherStart || 0) * 60;
         const useOther = config.enableOther && filesO.length > 0;
 
-        // Pattern Setup
         const pattern = [];
         for(let i=0; i<(config.counts.normal||0); i++) pattern.push('normal');
         for(let i=0; i<(config.counts.voice||0); i++) pattern.push('voice');
@@ -222,63 +201,33 @@ ipcMain.handle('backend:checkMax', async (e, { inputDirs, config }) => {
         }
         
         let simTime = 0;
-        let neededN = 0;
-        let neededV = 0;
-        let neededO = 0;
-        let patternIdx = 0;
+        let neededN = 0, neededV = 0, neededO = 0, patternIdx = 0;
 
         while(simTime < targetDur) {
-            // Check Other Clip
             if (useOther && simTime >= nextOtherTime) {
-                simTime += avgO;
-                neededO++;
-                nextOtherTime += otherInterval;
-                continue;
+                simTime += avgO; neededO++; nextOtherTime += otherInterval; continue;
             }
-
-            // Check Pattern
             if (pattern.length === 0) { simTime += 10; continue; } 
             
             const type = pattern[patternIdx % pattern.length];
-            if (type === 'normal') {
-                simTime += avgN;
-                neededN++;
-            } else {
-                simTime += avgV;
-                neededV++;
-            }
+            if (type === 'normal') { simTime += avgN; neededN++; } else { simTime += avgV; neededV++; }
             patternIdx++;
         }
 
-        // 4. Calculate Max Output
         let maxN = 999999, maxV = 999999, maxO = 999999;
-
-        if (neededN > 0) maxN = Math.floor(filesN.length / neededN);
-        else if (filesN.length > 0 && config.counts.normal > 0) maxN = 0; 
-
-        if (neededV > 0) maxV = Math.floor(filesV.length / neededV);
-        else if (filesV.length > 0 && config.counts.voice > 0) maxV = 0;
-
+        if (neededN > 0) maxN = Math.floor(filesN.length / neededN); else if (filesN.length > 0 && config.counts.normal > 0) maxN = 0; 
+        if (neededV > 0) maxV = Math.floor(filesV.length / neededV); else if (filesV.length > 0 && config.counts.voice > 0) maxV = 0;
         if (neededO > 0) maxO = Math.floor(filesO.length / neededO);
         
         let possibleCount = 999999;
         if (config.counts.normal > 0) possibleCount = Math.min(possibleCount, maxN);
         if (config.counts.voice > 0) possibleCount = Math.min(possibleCount, maxV);
         if (useOther) possibleCount = Math.min(possibleCount, maxO);
-
         if (possibleCount === 999999) possibleCount = 0;
 
         const detailMsg = `Analysis:\n- Normal: ${filesN.length} (Need ~${neededN}/vid)\n- Voice: ${filesV.length} (Need ~${neededV}/vid)\n- Other: ${filesO.length} (Need ~${neededO}/vid)`;
-        
-        return { 
-            success: true, 
-            message: `Result: Can create approx ${possibleCount} videos.\n${detailMsg}`, 
-            maxCount: possibleCount 
-        };
-
-    } catch(err) { 
-        return { success: false, message: err.message, maxCount: 0 }; 
-    }
+        return { success: true, message: `Result: Can create approx ${possibleCount} videos.\n${detailMsg}`, maxCount: possibleCount };
+    } catch(err) { return { success: false, message: err.message, maxCount: 0 }; }
 });
 
 // --- DEDUP ---
@@ -287,18 +236,21 @@ ipcMain.handle('backend:stopDedup', () => { if (dedupProcess) { dedupProcess.kil
 ipcMain.handle('backend:startDedup', async (event, { folderPath }) => {
     if (!fs.existsSync(folderPath)) return { success: false, message: "Folder not found" };
     
-    let scriptPath = path.join(__dirname, '../dedup_engine.py');
-    if (!fs.existsSync(scriptPath)) return { success: false, message: "Python engine not found" };
+    // FIX PATH: Tìm đúng file dedup_engine.py trong folder resources
+    let scriptPath = resolveResource('dedup_engine.py');
+
+    if (!fs.existsSync(scriptPath)) {
+        sendLog(`[ERR] Engine not found at: ${scriptPath}`);
+        return { success: false, message: "Python engine not found" };
+    }
     
-    sendLog(`[DEDUP] Starting Python Engine...`);
+    sendLog(`[DEDUP] Starting Engine: ${path.basename(scriptPath)}`);
     
     return new Promise((resolve) => {
         let isResolved = false;
         const pythonEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
 
-        dedupProcess = spawn('python', ['-u', scriptPath, folderPath, ffmpegPath], { 
-            env: pythonEnv 
-        });
+        dedupProcess = spawn('python', ['-u', scriptPath, folderPath, ffmpegPath], { env: pythonEnv });
         
         dedupProcess.stdout.on('data', (data) => {
             const lines = data.toString().split('\n');
@@ -314,15 +266,9 @@ ipcMain.handle('backend:startDedup', async (event, { folderPath }) => {
                         if (!isResolved) { isResolved = true; resolve({ success: false, message: msg.message }); }
                     }
                     else if (msg.type === 'done') {
-                        if (!isResolved) {
-                            isResolved = true;
-                            dedupProcess = null;
-                            resolve({ success: true, message: msg.message });
-                        }
+                        if (!isResolved) { isResolved = true; dedupProcess = null; resolve({ success: true, message: msg.message }); }
                     }
-                } catch (e) { 
-                    if(trimmed) sendLog(`[RAW] ${trimmed}`);
-                }
+                } catch (e) { if(trimmed) sendLog(`[RAW] ${trimmed}`); }
             });
         });
 
@@ -332,11 +278,8 @@ ipcMain.handle('backend:startDedup', async (event, { folderPath }) => {
             dedupProcess = null; 
             if (!isResolved) {
                 isResolved = true;
-                if (code === 0) {
-                    resolve({ success: true, message: "Scan finished successfully." });
-                } else {
-                    resolve({ success: false, message: `Engine exited unexpectedly (Code ${code}). Check Logs for details.` });
-                }
+                if (code === 0) resolve({ success: true, message: "Scan finished successfully." });
+                else resolve({ success: false, message: `Engine exited unexpectedly (Code ${code}).` });
             }
         });
     });
@@ -356,7 +299,6 @@ ipcMain.handle('backend:convert9to16', async (e, { inputType, inputPath, outputF
             `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1`
         ];
 
-        // SINGLE MODE
         if(inputType === 'file') {
             sendLog(`[CONVERT] Processing single file...`);
             await new Promise((resolve, reject) => fluentFfmpeg(inputPath)
@@ -364,16 +306,11 @@ ipcMain.handle('backend:convert9to16', async (e, { inputType, inputPath, outputF
                 .videoCodec('libx264').addOption('-preset','slow').addOption('-crf','18').addOption('-pix_fmt','yuv420p').addOption('-r', fps)
                 .save(outputFile).on('end', resolve).on('error', reject));
             return { success: true, message: "Convert Done!" };
-        } 
-        
-        // BATCH MODE
-        else {
+        } else {
             const files = getFilesSafeFull(inputPath).filter(f => ['.mp4','.mov','.mkv'].includes(path.extname(f)));
             if (files.length === 0) return { success: false, message: "No video files found." };
             if(!fs.existsSync(outputFile)) fs.mkdirSync(outputFile, {recursive:true});
-            
             sendLog(`[CONVERT] Found ${files.length} files. Saving to: ${outputFile}`);
-            
             for(let i=0; i<files.length; i++) {
                 if(isStopConvert) break;
                 const file = files[i];
@@ -384,9 +321,7 @@ ipcMain.handle('backend:convert9to16', async (e, { inputType, inputPath, outputF
                         .complexFilter(complexFilter)
                         .videoCodec('libx264').addOption('-preset','veryfast').addOption('-crf','20').addOption('-r', fps) 
                         .save(outName).on('end', resolve).on('error', reject));
-                } catch(err) {
-                    sendLog(`[ERR] Failed ${path.basename(file)}: ${err.message}`);
-                }
+                } catch(err) { sendLog(`[ERR] Failed ${path.basename(file)}: ${err.message}`); }
             }
             return { success: true, message: "Batch Convert Finished." };
         }
@@ -394,16 +329,13 @@ ipcMain.handle('backend:convert9to16', async (e, { inputType, inputPath, outputF
 });
 
 // ==========================================
-// 7. MERGE (FIXED STOP, INTRO & FONTS)
+// 7. MERGE (FIXED STOP, INTRO & FONTS & PATHS)
 // ==========================================
 let isStopMerge = false;
-ipcMain.handle('backend:stopMerge', () => { 
-    isStopMerge = true; 
-    return { success: true }; 
-});
+ipcMain.handle('backend:stopMerge', () => { isStopMerge = true; return { success: true }; });
 
 ipcMain.handle('backend:merge', async (e, { inputDirs, outputFile, config, overlayConfig, deleteSources, introPath }) => {
-    isStopMerge = false; // Reset stop flag
+    isStopMerge = false; 
     const { normal, voice, other } = inputDirs;
     const workDir = path.join(path.dirname(outputFile), `.merge_temp_${Date.now()}`);
     ensureDir(workDir);
@@ -417,36 +349,31 @@ ipcMain.handle('backend:merge', async (e, { inputDirs, outputFile, config, overl
         const [targetW, targetH] = resString.split('x');
         const isVerticalOutput = parseInt(targetW) < parseInt(targetH); 
         
-        // --- 1. OVERLAY SETUP (AUTO DETECT FONTS) ---
+        // --- 1. OVERLAY SETUP ---
         let overlayPngPath = null;
         if (overlayConfig && overlayConfig.enabled && (overlayConfig.text1 || overlayConfig.text2)) {
             sendLog("[MERGE] Generating Text Overlay...");
             
-            // PRIORITY FONTS DETECTION (Chinese -> Korean -> Japanese -> English)
-            const priorityFonts = [
-                overlayConfig.fontPath, // User selected
-                "C:/Windows/Fonts/msyh.ttc",   // Chinese
-                "C:/Windows/Fonts/malgun.ttf", // Korean
-                "C:/Windows/Fonts/meiryo.ttc", // Japanese
-                "C:/Windows/Fonts/seguiemj.ttf", // Emoji
-                "C:/Windows/Fonts/arial.ttf"
-            ];
-            
+            const priorityFonts = [ overlayConfig.fontPath, "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/malgun.ttf", "C:/Windows/Fonts/meiryo.ttc", "C:/Windows/Fonts/seguiemj.ttf", "C:/Windows/Fonts/arial.ttf" ];
             let finalFont = null;
-            for (const f of priorityFonts) {
-                if (f && fs.existsSync(f)) { finalFont = f; break; }
-            }
+            for (const f of priorityFonts) { if (f && fs.existsSync(f)) { finalFont = f; break; } }
             overlayConfig.fontPath = finalFont;
 
-            const scriptPath = path.join(__dirname, '../text_renderer.py');
+            const scriptPath = resolveResource('text_renderer.py');
+            
             overlayPngPath = path.join(workDir, 'overlay.png');
             const pyPayload = { ...overlayConfig, width: parseInt(targetW), height: parseInt(targetH), position: isVerticalOutput ? 'top_right' : 'default' };
             
             await new Promise((resolve) => {
+                if (!fs.existsSync(scriptPath)) {
+                    sendLog(`[WARN] Text Renderer script not found at ${scriptPath}`);
+                    resolve(); return;
+                }
                 const pyEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
                 const py = spawn('python', [scriptPath, JSON.stringify(pyPayload), overlayPngPath], { env: pyEnv });
+                py.stderr.on('data', (d) => sendLog(`[PY-ERR] ${d.toString()}`));
                 py.on('close', resolve);
-                py.on('error', () => { overlayPngPath = null; resolve(); });
+                py.on('error', (err) => { sendLog(`[PY-FAIL] ${err.message}`); overlayPngPath = null; resolve(); });
             });
             if (!fs.existsSync(overlayPngPath)) overlayPngPath = null;
         }
@@ -465,30 +392,34 @@ ipcMain.handle('backend:merge', async (e, { inputDirs, outputFile, config, overl
         const tempSegments = [];
         const usedFiles = new Set();
 
-        // --- 2. NORMALIZE VIDEO (SUPPORT STOP & INTRO) ---
+        // --- 2. NORMALIZE VIDEO (NEW UNIVERSAL BLUR LOGIC) ---
         const normalizeVideo = async (filePath, index, shouldMute, isIntro = false) => {
             if (isStopMerge) return null;
             usedFiles.add(filePath);
-            const info = await getVideoInfo(filePath);
-            const isVerticalInput = info.width < info.height;
             const tempPath = path.join(workDir, `seg_${index}.mp4`);
             
             let complexFilter = [];
             let baseFilter = '';
             
-            if (!isVerticalOutput && config.autoConvert9to16 && isVerticalInput) {
-                baseFilter = `[0:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},gblur=sigma=80[bg];[0:v]scale=-1:${targetH}:flags=lanczos[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1`;
+            // LOGIC MỚI: Nếu tích chọn "Auto Fill Background (Blur)"
+            if (config.autoConvert9to16) {
+                // Bộ lọc này hoạt động cho cả 2 trường hợp:
+                // 1. Input Dọc -> Output Ngang (Blur 2 bên)
+                // 2. Input Ngang -> Output Dọc (Blur Trên/Dưới)
+                // Nguyên lý: 
+                // [bg] scale tăng lên để lấp đầy khung hình -> Crop -> Blur
+                // [fg] scale giảm xuống để nằm gọn trong khung hình (giữ tỷ lệ)
+                // overlay: đặt fg lên giữa bg
+                baseFilter = `[0:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=increase,crop=${targetW}:${targetH},gblur=sigma=80[bg];[0:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1`;
             } else {
+                // Logic cũ: Thêm viền đen (Pad) nếu tỷ lệ không khớp
                 baseFilter = `[0:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
             }
 
-            // Only add overlay if NOT intro
             if (!isIntro && overlayPngPath) {
                 baseFilter += `[v_base];[v_base][1:v]overlay=0:0`;
                 complexFilter = [baseFilter];
-            } else {
-                complexFilter = [baseFilter];
-            }
+            } else { complexFilter = [baseFilter]; }
 
             await new Promise((resolve, reject) => {
                 const cmd = fluentFfmpeg(filePath);
@@ -498,7 +429,6 @@ ipcMain.handle('backend:merge', async (e, { inputDirs, outputFile, config, overl
                     .audioCodec('aac').addOption('-ar', '44100').addOption('-ac', '2');
                 
                 if (shouldMute) cmd.audioFilters('volume=0');
-                
                 if (isStopMerge) { cmd.kill(); reject(new Error("Stopped")); return; }
                 cmd.save(tempPath).on('end', resolve).on('error', reject);
             });
@@ -508,35 +438,23 @@ ipcMain.handle('backend:merge', async (e, { inputDirs, outputFile, config, overl
         let segIdx = 0;
         sendLog(`[MERGE] Start loop... Target: ${targetDuration}s`);
 
-        // --- 2.5 PROCESS INTRO (IF EXISTS) ---
+        // PROCESS INTRO
         if (introPath && fs.existsSync(introPath)) {
             sendLog(`[MERGE] Adding Intro: ${path.basename(introPath)}`);
             try {
-                // Intro is never muted, never has text overlay
                 const introSeg = await normalizeVideo(introPath, segIdx, false, true);
-                if (introSeg) {
-                    const d = await getDuration(introSeg);
-                    tempSegments.push(introSeg);
-                    curTime += d; 
-                    segIdx++;
-                }
-            } catch (err) {
-                if(isStopMerge) throw new Error("Stopped");
-                sendLog(`[WARN] Intro fail: ${err.message}`);
-            }
+                if (introSeg) { tempSegments.push(introSeg); curTime += await getDuration(introSeg); segIdx++; }
+            } catch (err) { if(isStopMerge) throw new Error("Stopped"); sendLog(`[WARN] Intro fail: ${err.message}`); }
         }
 
-        // --- 3. MAIN LOOP ---
+        // MAIN LOOP
         while(curTime < targetDuration) {
             if (isStopMerge) throw new Error("Stopped");
-            let selectedFile = null;
-            let type = '';
+            let selectedFile = null, type = '';
 
             if (useOther && curTime >= nextOtherTime) {
                 if (filesO.length === 0) filesO = getFilesSafeFull(other).sort(()=>Math.random()-.5);
-                selectedFile = filesO.pop();
-                type = 'other';
-                nextOtherTime += otherInterval;
+                selectedFile = filesO.pop(); type = 'other'; nextOtherTime += otherInterval;
             } else {
                 if (pattern.length === 0) break;
                 type = pattern[patternIdx % pattern.length];
@@ -547,17 +465,10 @@ ipcMain.handle('backend:merge', async (e, { inputDirs, outputFile, config, overl
 
             if (!selectedFile) break;
             sendLog(`[MERGE] Adding ${type}: ${path.basename(selectedFile)}`);
-            
-            let isMute = (type === 'other' && config.muteOther);
             try {
-                let segmentPath = await normalizeVideo(selectedFile, segIdx, isMute, false);
-                const d = await getDuration(segmentPath);
-                tempSegments.push(segmentPath);
-                curTime += d;
-                segIdx++;
-            } catch(e) { 
-                if (isStopMerge) throw e; 
-            }
+                let segmentPath = await normalizeVideo(selectedFile, segIdx, (type === 'other' && config.muteOther), false);
+                tempSegments.push(segmentPath); curTime += await getDuration(segmentPath); segIdx++;
+            } catch(e) { if (isStopMerge) throw e; }
         }
 
         if (tempSegments.length === 0) throw new Error("No clips processed");
@@ -574,24 +485,10 @@ ipcMain.handle('backend:merge', async (e, { inputDirs, outputFile, config, overl
         });
         
         removeDir(workDir); 
-
-        // --- 4. CLEANUP SOURCE ---
         if (deleteSources && !isStopMerge) { 
             sendLog(`[CLEANUP] Deleting ${usedFiles.size} source files...`); 
-            const deleteFileSafe = (f, retries = 5) => {
-                try {
-                    if(fs.existsSync(f)) fs.unlinkSync(f);
-                } catch (err) {
-                    if (retries > 0) setTimeout(() => deleteFileSafe(f, retries - 1), 200);
-                    else sendLog(`[WARN] Could not delete: ${path.basename(f)}`);
-                }
-            };
-            for (const f of usedFiles) deleteFileSafe(f);
+            for (const f of usedFiles) { try { if(fs.existsSync(f)) fs.unlinkSync(f); } catch (e) {} }
         }
-
         return { success: true, message: "Merge Completed!" };
-    } catch(err) { 
-        removeDir(workDir); 
-        return { success: false, message: err.message }; 
-    }
+    } catch(err) { removeDir(workDir); return { success: false, message: err.message }; }
 });

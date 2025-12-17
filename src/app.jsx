@@ -15,7 +15,7 @@ const PathInput = ({ label, placeholder, value, onChange, isFile = false, isSave
     const handleSelect = async () => { 
         if(window.electronAPI) { 
             let path;
-            if (isSave) path = await window.electronAPI.saveFile(isSave); // isSave có thể là options
+            if (isSave) path = await window.electronAPI.saveFile(isSave); 
             else path = isFile ? await window.electronAPI.openFile(filters) : await window.electronAPI.openDirectory(); 
             if(path) onChange(path); 
         } 
@@ -35,18 +35,39 @@ const ActivationScreen = ({ onActivated }) => { const [keyInput, setKeyInput] = 
 // 2. TABS CONTENT
 // ==========================================
 
-const RenameTab = () => { const [logs, setLogs] = useState([]); const [isRunning, setIsRunning] = useState(false); const [inputPath, setInputPath] = useState(''); const [outputPath, setOutputPath] = useState(''); useEffect(() => { if(window.electronAPI) window.electronAPI.onSystemLog(msg => setLogs(p => [msg, ...p])); }, []); const handleStart = async () => { if (!inputPath || !outputPath) return alert("Missing Path!"); setIsRunning(true); setLogs([]); if(window.electronAPI) { const res = await window.electronAPI.rename({ inputDir: inputPath, outputDir: outputPath }); alert(res.message); } setIsRunning(false); }; const handleStop = async () => { if(window.electronAPI) await window.electronAPI.stopRename(); }; return ( <div className="max-w-3xl mx-auto"> <div className="grid grid-cols-2 gap-4 mb-4"><PathInput label="Input" value={inputPath} onChange={setInputPath} /><PathInput label="Output" value={outputPath} onChange={setOutputPath} /></div> <div className="flex justify-center gap-4 mb-4"> <button onClick={handleStart} disabled={isRunning} className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded text-sm font-bold flex gap-2 disabled:opacity-50">{isRunning ? <Loader className="animate-spin" size={16}/> : <Edit3 size={16}/>} Rename</button> {isRunning && <button onClick={handleStop} className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded text-sm font-bold flex gap-2"><Ban size={16}/> Stop</button>} </div> <div className="bg-[#161922] border border-gray-700 h-64 overflow-y-auto p-2 text-xs font-mono text-gray-400 custom-scrollbar">{logs.map((l, i) => <div key={i} className="mb-0.5">{l}</div>)}</div> </div> ); };
+const RenameTab = () => { 
+    // AUTO SAVE LOGIC
+    const [inputPath, setInputPath] = useState(localStorage.getItem('rn_in') || ''); 
+    const [outputPath, setOutputPath] = useState(localStorage.getItem('rn_out') || ''); 
+    
+    useEffect(() => localStorage.setItem('rn_in', inputPath), [inputPath]);
+    useEffect(() => localStorage.setItem('rn_out', outputPath), [outputPath]);
+
+    const [logs, setLogs] = useState([]); 
+    const [isRunning, setIsRunning] = useState(false); 
+    
+    useEffect(() => { if(window.electronAPI) window.electronAPI.onSystemLog(msg => setLogs(p => [msg, ...p])); }, []); 
+    
+    const handleStart = async () => { if (!inputPath || !outputPath) return alert("Missing Path!"); setIsRunning(true); setLogs([]); if(window.electronAPI) { const res = await window.electronAPI.rename({ inputDir: inputPath, outputDir: outputPath }); alert(res.message); } setIsRunning(false); }; 
+    const handleStop = async () => { if(window.electronAPI) await window.electronAPI.stopRename(); }; 
+    
+    return ( <div className="max-w-3xl mx-auto"> <div className="grid grid-cols-2 gap-4 mb-4"><PathInput label="Input" value={inputPath} onChange={setInputPath} /><PathInput label="Output" value={outputPath} onChange={setOutputPath} /></div> <div className="flex justify-center gap-4 mb-4"> <button onClick={handleStart} disabled={isRunning} className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded text-sm font-bold flex gap-2 disabled:opacity-50">{isRunning ? <Loader className="animate-spin" size={16}/> : <Edit3 size={16}/>} Rename</button> {isRunning && <button onClick={handleStop} className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded text-sm font-bold flex gap-2"><Ban size={16}/> Stop</button>} </div> <div className="bg-[#161922] border border-gray-700 h-64 overflow-y-auto p-2 text-xs font-mono text-gray-400 custom-scrollbar">{logs.map((l, i) => <div key={i} className="mb-0.5">{l}</div>)}</div> </div> ); 
+};
 
 const DedupTab = () => {
-    const [delFolder, setDelFolder] = useState('');
-    const [delDuration, setDelDuration] = useState(2);
+    // AUTO SAVE LOGIC
+    const [delFolder, setDelFolder] = useState(localStorage.getItem('dd_del_folder') || '');
+    const [delDuration, setDelDuration] = useState(localStorage.getItem('dd_del_duration') || 2);
+    const [dedupFolder, setDedupFolder] = useState(localStorage.getItem('dd_dedup_folder') || '');
+
+    useEffect(() => localStorage.setItem('dd_del_folder', delFolder), [delFolder]);
+    useEffect(() => localStorage.setItem('dd_del_duration', delDuration), [delDuration]);
+    useEffect(() => localStorage.setItem('dd_dedup_folder', dedupFolder), [dedupFolder]);
+
     const [isDeleting, setIsDeleting] = useState(false);
     const [delProgress, setDelProgress] = useState({ current: 0, total: 0 });
-
-    const [dedupFolder, setDedupFolder] = useState('');
     const [dedupProgress, setDedupProgress] = useState({ phase: 'Idle', current: 0, total: 0, msg: '' });
     const [isScanning, setIsScanning] = useState(false);
-
     const [logs, setLogs] = useState([]);
 
     useEffect(() => {
@@ -55,7 +76,6 @@ const DedupTab = () => {
 
         if(window.electronAPI) {
             cleanLog = window.electronAPI.onSystemLog(msg => setLogs(p => [msg, ...p]));
-            
             if (window.electronAPI.onDedupProgress) {
                 cleanProgress = window.electronAPI.onDedupProgress((data) => {
                     setDedupProgress({
@@ -153,11 +173,18 @@ const DedupTab = () => {
 };
 
 const Convert9to16Tab = () => { 
-    const [mode, setMode] = useState('folder'); 
-    const [inputPath, setInputPath] = useState(''); 
-    const [outputFile, setOutputFile] = useState(''); 
+    // AUTO SAVE LOGIC
+    const [mode, setMode] = useState(localStorage.getItem('cv_mode') || 'folder'); 
+    const [inputPath, setInputPath] = useState(localStorage.getItem('cv_input') || ''); 
+    const [outputFile, setOutputFile] = useState(localStorage.getItem('cv_output') || ''); 
     const [blurLevel, setBlurLevel] = useState('Medium'); 
-    const [resolution, setResolution] = useState('1920x1080_AV1_30'); 
+    const [resolution, setResolution] = useState(localStorage.getItem('cv_res') || '1920x1080_AV1_30'); 
+    
+    useEffect(() => localStorage.setItem('cv_mode', mode), [mode]);
+    useEffect(() => localStorage.setItem('cv_input', inputPath), [inputPath]);
+    useEffect(() => localStorage.setItem('cv_output', outputFile), [outputFile]);
+    useEffect(() => localStorage.setItem('cv_res', resolution), [resolution]);
+
     const [logs, setLogs] = useState([]); 
     const [isRunning, setIsRunning] = useState(false); 
     
@@ -220,9 +247,10 @@ const Convert9to16Tab = () => {
     ); 
 };
 
-// --- MERGE TAB (UPDATED UI & INTRO & STOP) ---
+// --- MERGE TAB (UPDATED UI & INTRO & STOP & AUTO SAVE & BLUR ALL) ---
 const MergeTab = () => {
-    const [config, setConfig] = useState({ 
+    // 1. Config Init
+    const defaultConfig = { 
         counts: { normal: 3, voice: 1, other: 1 }, 
         duration: 10, 
         resolution: '1920x1080_H264_30', 
@@ -231,11 +259,40 @@ const MergeTab = () => {
         otherStart: 0, 
         muteOther: false, 
         enableOther: false 
+    };
+
+    const [config, setConfig] = useState(() => {
+        try {
+            const saved = localStorage.getItem('mg_config');
+            return saved ? { ...defaultConfig, ...JSON.parse(saved) } : defaultConfig;
+        } catch { return defaultConfig; }
     });
-    
-    const [paths, setPaths] = useState({ normal: '', voice: '', other: '', intro: '', output: '' });
-    const [overlay, setOverlay] = useState({ enabled: true, text1: 'Line 1', text2: 'Line 2', size: 35, padding: 10, color: '#FFFFFF', enableStroke: true, strokeColor: '#000000', enableBg: true, bgColor: '#FF5733' });
-    const [deleteSources, setDeleteSources] = useState(false);
+
+    const [paths, setPaths] = useState(() => {
+        try {
+            const saved = localStorage.getItem('mg_paths');
+            return saved ? JSON.parse(saved) : { normal: '', voice: '', other: '', intro: '', output: '' };
+        } catch { return { normal: '', voice: '', other: '', intro: '', output: '' }; }
+    });
+
+    const defaultOverlay = { enabled: true, text1: 'Line 1', text2: 'Line 2', size: 35, padding: 10, color: '#FFFFFF', enableStroke: true, strokeColor: '#000000', enableBg: true, bgColor: '#FF5733' };
+    const [overlay, setOverlay] = useState(() => {
+        try {
+            const saved = localStorage.getItem('mg_overlay');
+            return saved ? { ...defaultOverlay, ...JSON.parse(saved) } : defaultOverlay;
+        } catch { return defaultOverlay; }
+    });
+
+    const [deleteSources, setDeleteSources] = useState(() => {
+        return localStorage.getItem('mg_delete_sources') === 'true';
+    });
+
+    // 2. Save Effects
+    useEffect(() => { localStorage.setItem('mg_config', JSON.stringify(config)); }, [config]);
+    useEffect(() => { localStorage.setItem('mg_paths', JSON.stringify(paths)); }, [paths]);
+    useEffect(() => { localStorage.setItem('mg_overlay', JSON.stringify(overlay)); }, [overlay]);
+    useEffect(() => { localStorage.setItem('mg_delete_sources', deleteSources); }, [deleteSources]);
+
     const [logs, setLogs] = useState([]);
     const [isProcessing, setIsProcessing] = useState(false);
 
@@ -247,30 +304,13 @@ const MergeTab = () => {
         return () => { if(cleanLog) cleanLog(); };
     }, []);
 
-    useEffect(() => { localStorage.setItem('dvmedia_overlay_settings', JSON.stringify(overlay)); }, [overlay]);
-    useEffect(() => { localStorage.setItem('dvmedia_delete_sources', JSON.stringify(deleteSources)); }, [deleteSources]);
-
     useEffect(() => {
         setConfig(prev => ({ ...prev, enableOther: !!paths.other }));
     }, [paths.other]);
 
-    const isVerticalOutput = () => {
-        const [res] = config.resolution.split('_');
-        const [w, h] = res.split('x');
-        return parseInt(w) < parseInt(h);
-    };
-
     const handleResolutionChange = (e) => {
         const val = e.target.value;
-        const [res] = val.split('_');
-        const [w, h] = res.split('x');
-        const isVertical = parseInt(w) < parseInt(h);
-        
-        setConfig(prev => ({ 
-            ...prev, 
-            resolution: val,
-            autoConvert9to16: isVertical ? false : prev.autoConvert9to16 
-        }));
+        setConfig(prev => ({ ...prev, resolution: val }));
     };
 
     const handleCount = (type, val) => {
@@ -376,14 +416,15 @@ const MergeTab = () => {
                         <option value="720x1280_H264_30">9:16 - 720p 30fps</option>
                     </select> 
                     
+                    {/* UPDATED CHECKBOX: WORKS FOR BOTH 16:9 AND 9:16 */}
                     <div 
-                        className={`flex items-center gap-2 mb-3 cursor-pointer group ${isVerticalOutput() ? 'opacity-50 cursor-not-allowed' : ''}`} 
-                        onClick={() => !isVerticalOutput() && setConfig(prev => ({...prev, autoConvert9to16: !prev.autoConvert9to16}))}
+                        className="flex items-center gap-2 mb-3 cursor-pointer group"
+                        onClick={() => setConfig(prev => ({...prev, autoConvert9to16: !prev.autoConvert9to16}))}
                     > 
                         <div className={`w-4 h-4 border rounded flex items-center justify-center transition-all ${config.autoConvert9to16 ? 'bg-green-600 border-green-500' : 'border-gray-500 bg-[#15171e]'}`}> 
                             {config.autoConvert9to16 && <CheckSquare size={12} className="text-white" />} 
                         </div> 
-                        <span className={`text-xs font-bold ${config.autoConvert9to16 ? 'text-green-400' : 'text-gray-400 group-hover:text-gray-300'}`}> Auto Convert 9:16 to 16:9 (Blur) </span> 
+                        <span className={`text-xs font-bold ${config.autoConvert9to16 ? 'text-green-400' : 'text-gray-400 group-hover:text-gray-300'}`}> Auto Fill Background (Blur) </span> 
                     </div> 
                     
                     <label className="block text-gray-500 text-xs font-bold mb-1 uppercase">Output File:</label> 
