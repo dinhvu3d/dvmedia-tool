@@ -777,47 +777,61 @@ const SettingsTab = () => {
     );
 };
 
-// --- MAIN APP (MENU STRUCTURE) ---
+// --- MAIN APP ---
 export default function App() {
   const [activeTab, setActiveTab] = useState('rename');
   const [isActivated, setIsActivated] = useState(false); 
   const [upStatus, setUpStatus] = useState('idle'); 
   const [upMsg, setUpMsg] = useState(''); 
-  const [isUpdating, setIsUpdating] = useState(false);
+  
+  // Xóa state isUpdating vì ta sẽ dùng upStatus để kiểm soát
+  // const [isUpdating, setIsUpdating] = useState(false); 
 
   useEffect(() => { 
       if(window.electronAPI) { 
           window.electronAPI.checkLicense().then(res => { if(res.activated) setIsActivated(true); }); 
           window.electronAPI.updaterCheck(); 
+          
           window.electronAPI.onUpdateStatus(({ status, msg }) => { 
               setUpStatus(status); 
-              setUpMsg(msg); 
-              if(status === 'downloaded' && isUpdating) { window.electronAPI.updaterInstall(); } 
+              setUpMsg(msg);
+              // BỎ ĐOẠN TỰ ĐỘNG CÀI ĐẶT Ở ĐÂY ĐỂ TRÁNH LỖI NGẦM
           }); 
       } 
-  }, [isUpdating]);
+  }, []);
 
-  const handleUpdateConfirm = () => { setIsUpdating(true); if(window.electronAPI) window.electronAPI.updaterDownload(); }; 
+  const handleUpdateConfirm = () => { 
+      // 1. Chuyển trạng thái ngay lập tức để người dùng biết đang tải
+      setUpStatus('downloading'); 
+      setUpMsg('Starting download...');
+      
+      // 2. Gọi backend tải về
+      if(window.electronAPI) window.electronAPI.updaterDownload(); 
+  }; 
+
+  const handleInstall = () => {
+      // 3. Hàm mới để gọi lệnh cài đặt khi người dùng bấm
+      if(window.electronAPI) window.electronAPI.updaterInstall();
+  };
+
   const handleUpdateClose = () => { setUpStatus('idle'); };
 
-  // UPDATED MENU ITEMS
   const menuItems = [ 
       { id: 'rename', label: 'Rename', icon: Edit3 }, 
       { id: 'dedup', label: 'Dedup', icon: Filter }, 
       { id: 'convert-9-16', label: 'Convert 9:16', icon: LayoutTemplate }, 
-      { id: 'mix-video', label: 'Mix Video', icon: Video }, // Changed from 'ghep-video'
-      { id: 'sync-video', label: 'Merge', icon: Zap }, // New Tab
+      { id: 'mix-video', label: 'Mix Video', icon: Video }, 
+      { id: 'sync-video', label: 'Merge', icon: Zap }, 
       { id: 'settings', label: 'Settings', icon: Settings } 
   ];
 
-  // UPDATED RENDER
   const renderContent = () => { 
       switch (activeTab) { 
           case 'rename': return <RenameTab />; 
           case 'dedup': return <DedupTab />; 
           case 'convert-9-16': return <Convert9to16Tab />; 
-          case 'mix-video': return <MixVideoTab />; // Restored Logic
-          case 'sync-video': return <SyncVideoTab />; // Placeholder
+          case 'mix-video': return <MixVideoTab />; 
+          case 'sync-video': return <SyncVideoTab />; 
           case 'settings': return <SettingsTab />; 
           default: return null; 
       } 
@@ -827,7 +841,57 @@ export default function App() {
   
   return (
     <div className="flex h-screen w-full bg-[#11141c] text-white font-sans overflow-hidden select-none relative">
-      <UpdateNotificationModal status={upStatus} msg={upMsg} onClose={handleUpdateClose} onConfirm={handleUpdateConfirm} />
+      {/* UPDATE MODAL CUSTOMIZED */}
+      {['available', 'downloading', 'downloaded', 'error'].includes(upStatus) && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"> 
+            <div className="bg-[#1e222b] border border-gray-600 rounded-lg shadow-2xl w-full max-w-md p-6 flex flex-col gap-4"> 
+                <div className="flex items-center gap-3 border-b border-gray-700 pb-4"> 
+                    <div className="bg-green-500/20 p-2 rounded-full">
+                        {upStatus === 'downloading' ? <Loader size={24} className="text-blue-500 animate-spin" /> : <Zap size={24} className="text-green-500" />}
+                    </div> 
+                    <div>
+                        <h3 className="text-lg font-bold text-white">
+                            {upStatus === 'downloaded' ? 'Ready to Install' : 'Update Manager'}
+                        </h3>
+                        <p className="text-xs text-gray-400">
+                            {upStatus === 'downloading' ? 'Downloading updates...' : 'New version found.'}
+                        </p>
+                    </div> 
+                </div> 
+                <div className="bg-[#15171e] p-3 rounded border border-gray-700">
+                    <p className="text-sm text-gray-300 font-mono text-center">{upMsg}</p>
+                </div> 
+                <div className="flex gap-3 justify-end pt-2"> 
+                    {/* NÚT CLOSE (Chỉ hiện khi chưa tải xong) */}
+                    {upStatus !== 'downloading' && (
+                        <button onClick={handleUpdateClose} className="px-4 py-2 rounded text-sm font-bold text-gray-400 hover:bg-gray-700">Later</button>
+                    )}
+                    
+                    {/* TRẠNG THÁI 1: CÓ BẢN MỚI -> NÚT UPDATE */}
+                    {upStatus === 'available' && (
+                        <button onClick={handleUpdateConfirm} className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded text-sm font-bold flex gap-2"> 
+                            <Download size={16} /> Download 
+                        </button>
+                    )}
+
+                    {/* TRẠNG THÁI 2: ĐANG TẢI -> NÚT DISABLE */}
+                    {upStatus === 'downloading' && (
+                        <button disabled className="w-full bg-blue-600/50 text-white px-6 py-2 rounded text-sm font-bold flex justify-center gap-2 cursor-wait"> 
+                            <Loader size={16} className="animate-spin" /> Downloading... 
+                        </button> 
+                    )}
+
+                    {/* TRẠNG THÁI 3: TẢI XONG -> NÚT INSTALL */}
+                    {upStatus === 'downloaded' && (
+                        <button onClick={handleInstall} className="w-full bg-orange-600 hover:bg-orange-700 text-white px-6 py-2 rounded text-sm font-bold flex justify-center gap-2 animate-pulse"> 
+                            <RefreshCw size={16} /> Install & Restart 
+                        </button> 
+                    )}
+                </div> 
+            </div> 
+        </div>
+      )}
+
       <div className="w-56 flex-shrink-0 bg-[#161922] border-r border-gray-800 flex flex-col pt-4">
         <div className="px-6 mb-6"><h1 className="text-2xl font-bold text-orange-500 tracking-tight">DVMix</h1></div>
         <div className="flex-1 overflow-y-auto custom-scrollbar">{menuItems.map((item) => (<SidebarItem key={item.id} icon={item.icon} label={item.label} isActive={activeTab === item.id} onClick={() => setActiveTab(item.id)} />))}</div>

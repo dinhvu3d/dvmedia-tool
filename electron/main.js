@@ -87,7 +87,7 @@ function createWindow() {
   autoUpdater.on('update-available', (info) => { if(mainWindow) mainWindow.webContents.send('update-status', { status: 'available', msg: `Version ${info.version} is available!` }); });
   autoUpdater.on('update-not-available', () => { if(mainWindow) mainWindow.webContents.send('update-status', { status: 'idle', msg: 'Latest version installed.' }); });
   autoUpdater.on('error', (err) => { if(mainWindow) mainWindow.webContents.send('update-status', { status: 'error', msg: 'Update error: ' + err.message }); });
-  autoUpdater.on('download-progress', (progressObj) => { if(mainWindow) mainWindow.webContents.send('update-status', { status: 'downloading', msg: `Downloading... ${Math.round(progressObj.percent)}%` }); });
+  autoUpdater.on('download-progress', (progressObj) => { let percent = progressObj.percent; if(mainWindow) mainWindow.webContents.send('update-status', { status: 'downloading', msg: `Downloading... ${Math.round(percent)}%` }); });
   autoUpdater.on('update-downloaded', (info) => { if(mainWindow) mainWindow.webContents.send('update-status', { status: 'downloaded', msg: 'Update downloaded. Restart to install?' }); });
 }
 app.whenReady().then(createWindow);
