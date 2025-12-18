@@ -584,6 +584,24 @@ ipcMain.handle('backend:analyzeSync', async (e, { videoPath, audioPath, srtPath 
     } catch (err) { return { success: false, message: err.message }; }
 });
 
+// --- TTS CONNECTION CHECK ---
+ipcMain.handle('tts:checkConnection', async (e, url) => {
+    return new Promise((resolve) => {
+        // Sử dụng module http của Node.js để kiểm tra nhanh
+        const request = http.get(url, (res) => {
+            // Nếu server trả về bất kỳ status nào (thường là 200 hoặc 404 cho root) là nó đang sống
+            resolve(res.statusCode === 200 || res.statusCode === 404);
+        });
+        
+        request.on('error', () => resolve(false));
+        
+        request.setTimeout(2000, () => { // Quá 2 giây không phản hồi thì coi như fail
+            request.destroy();
+            resolve(false);
+        });
+    });
+});
+
 // ==========================================
 // 8. SYNC VIDEO RENDER ENGINE (OPTIMIZED GPU & LOGIC)
 // ==========================================
@@ -856,4 +874,66 @@ ipcMain.handle('backend:renderSync', async (e, { inputs, config, analysisData })
     } catch (err) {
         return { success: false, message: err.message };
     }
+});
+
+// ==========================================
+// TTS HANDLERS (SERVER & ENGINE)
+// ==========================================
+let ttsServerProcess = null;
+let ttsRunProcess = null;
+
+// 1. Handler Khởi động Server GPT-SoVITS ngầm
+ipcMain.handle('tts:startServer', async (event, { pythonPath, apiScriptPath }) => {
+    if (ttsServerProcess) return { success: true, message: "Server đang chạy." };
+    return new Promise((resolve) => {
+        const workingDir = path.dirname(apiScriptPath);
+        ttsServerProcess = spawn(pythonPath, [apiScriptPath], { 
+            cwd: workingDir,
+            windowsHide: true,
+            creationflags: 0x08000000 
+        });
+        // Đợi 5s để server load model vào GPU
+        setTimeout(() => resolve({ success: true }), 5000);
+    });
+});
+
+// 2. Handler chính chạy TTS (Lệnh mà bạn đang bị báo lỗi)
+ipcMain.handle('backend:startTTS', async (event, config) => {
+    const scriptPath = resolveResource('tts_engine.py');
+    if (!fs.existsSync(scriptPath)) return { success: false, message: "Không thấy tts_engine.py" };
+
+    return new Promise((resolve) => {
+        let isResolved = false;
+        const pythonEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+        
+        // Khởi chạy engine xử lý
+        ttsRunProcess = spawn('python', ['-u', scriptPath, JSON.stringify(config)], { env: pythonEnv });
+
+        ttsRunProcess.stdout.on('data', (data) => {
+            const lines = data.toString().split('\n');
+            lines.forEach(line => {
+                const trimmed = line.trim();
+                if (!trimmed) return;
+                try {
+                    const msg = JSON.parse(trimmed);
+                    if (msg.type === 'log') sendLog(msg.message);
+                    // Gửi tiến trình (%) về UI
+                    if (msg.type === 'progress') {
+                        if(mainWindow) mainWindow.webContents.send('tts-progress', msg.percent);
+                    }
+                    if (msg.type === 'done') { isResolved = true; resolve({ success: true, message: msg.message }); }
+                } catch (e) { sendLog(trimmed); }
+            });
+        });
+
+        ttsRunProcess.stderr.on('data', (data) => sendLog(`[ERR] ${data.toString()}`));
+
+        ttsRunProcess.on('close', (code) => {
+            ttsRunProcess = null;
+            if (!isResolved) {
+                isResolved = true;
+                resolve(code === 0 ? { success: true } : { success: false, message: `Thoát với mã ${code}` });
+            }
+        });
+    });
 });

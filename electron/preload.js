@@ -73,4 +73,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('render-progress', listener);
       return () => ipcRenderer.removeListener('render-progress', listener);
   },
+
+  // TTS
+  checkTTSConnection: (url) => ipcRenderer.invoke('tts:checkConnection', url),
+  startTTS: (config) => ipcRenderer.invoke('backend:startTTS', config),
+  onTTSProgress: (cb) => {
+      const listener = (e, v) => cb(v);
+      ipcRenderer.on('tts-progress', listener);
+      return () => ipcRenderer.removeListener('tts-progress', listener);
+  },
+  startServer: (data) => ipcRenderer.invoke('tts:startServer', data),
+  stopServer: () => ipcRenderer.invoke('tts:stopServer'),
 });

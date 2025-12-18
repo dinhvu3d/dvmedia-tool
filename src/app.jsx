@@ -4,7 +4,7 @@ import {
   Loader, Download, ChevronDown, RefreshCw, Zap, 
   LayoutTemplate, File, Folder, CheckSquare, Key, Copy, 
   Repeat, Edit3, Filter, Play, Clock, VolumeX, 
-  Mic, Save, Cpu
+  Mic, Save, Cpu, Languages
 } from 'lucide-react';
 
 // ==========================================
@@ -718,6 +718,194 @@ const SyncVideoTab = () => {
     );
 };
 
+const TTSTab = () => {
+    // 1. Khởi tạo State cấu hình TTS
+    const [config, setConfig] = useState(() => {
+        try {
+            const saved = localStorage.getItem('tts_config');
+            return saved ? JSON.parse(saved) : {
+                apiUrl: 'http://127.0.0.1:9880',
+                refAudio: '', refText: '', refLang: 'vi', targetLang: 'vi',
+                inputPath: '', outputFolder: '', format: 'wav'
+            };
+        } catch { return { apiUrl: 'http://127.0.0.1:9880', refAudio: '', refText: '', refLang: 'vi', targetLang: 'vi', inputPath: '', outputFolder: '', format: 'wav' }; }
+    });
+
+    // 2. Khởi tạo State cấu hình Server
+    const [serverConfig, setServerConfig] = useState({
+        pythonPath: localStorage.getItem('tts_py_path') || '',
+        apiScriptPath: localStorage.getItem('tts_script_path') || ''
+    });
+
+    const [logs, setLogs] = useState([]);
+    const [isRunning, setIsRunning] = useState(false);
+    const [isConnected, setIsConnected] = useState(false);
+    const [isServerRunning, setIsServerRunning] = useState(false);
+    const [progress, setProgress] = useState(0);
+
+    // Lưu config mỗi khi thay đổi
+    useEffect(() => { localStorage.setItem('tts_config', JSON.stringify(config)); }, [config]);
+
+    // Lắng nghe Log và Progress từ Electron
+    useEffect(() => {
+        let cleanLog, cleanProgress;
+        if(window.electronAPI) {
+            cleanLog = window.electronAPI.onSystemLog(msg => setLogs(p => [msg, ...p]));
+            if(window.electronAPI.onTTSProgress) {
+                cleanProgress = window.electronAPI.onTTSProgress(p => setProgress(p));
+            }
+        }
+        return () => { if(cleanLog) cleanLog(); if(cleanProgress) cleanProgress(); };
+    }, []);
+
+    // --- CÁC HÀM XỬ LÝ ---
+
+    const checkConnection = async () => {
+        if(window.electronAPI) {
+            const ok = await window.electronAPI.checkTTSConnection(config.apiUrl);
+            setIsConnected(ok);
+            setLogs(p => [ok ? "Ready: Đã kết nối tới GPT-SoVITS Server." : "Error: Không thể kết nối tới Server.", ...p]);
+        }
+    };
+
+    const handleStartServer = async () => {
+        if (!serverConfig.pythonPath || !serverConfig.apiScriptPath) return alert("Chọn Python EXE và api_v2.py!");
+        setIsServerRunning(true);
+        setLogs(p => [">>> Đang khởi động API Server ngầm...", ...p]);
+        await window.electronAPI.startServer(serverConfig);
+        setTimeout(checkConnection, 5000); // Tự động check sau 5s
+    };
+
+    const handleStart = async () => {
+        if (!isConnected) return alert("Vui lòng kết nối API Server trước!");
+        setIsRunning(true); setProgress(0);
+        setLogs(p => [">>> Bắt đầu gửi yêu cầu TTS...", ...p]);
+        const res = await window.electronAPI.startTTS(config);
+        if (res.success) alert(res.message);
+        setIsRunning(false);
+    };
+
+    return (
+        <div className="max-w-5xl mx-auto flex gap-6 h-full pb-4">
+            {/* CỘT TRÁI: CẤU HÌNH TEXT TO SPEECH */}
+            <div className="w-1/2 flex flex-col gap-3 h-full overflow-y-auto custom-scrollbar pr-1">
+                <div className="bg-[#1e222b] p-4 rounded border border-gray-700 shadow-md">
+                    <h3 className="text-orange-500 font-bold text-sm mb-4 uppercase flex justify-between items-center">
+                        Text To Speech 
+                        <span className={`text-[10px] px-2 py-0.5 rounded ${isConnected ? 'bg-green-600/20 text-green-500' : 'bg-red-600/20 text-red-500'}`}>
+                            {isConnected ? '● ONLINE' : '● OFFLINE'}
+                        </span>
+                    </h3>
+                    
+                    <div className="mb-3">
+                        <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">API URL & Kết nối:</label>
+                        <div className="flex gap-2">
+                            <input type="text" value={config.apiUrl} onChange={e => setConfig({...config, apiUrl: e.target.value})} className="flex-1 bg-[#15171e] border border-gray-600 text-white text-xs rounded px-2 outline-none focus:border-orange-500" />
+                            <button onClick={checkConnection} className={`px-3 py-2 rounded text-[10px] font-bold ${isConnected ? 'bg-green-600' : 'bg-red-600'} text-white`}>
+                                {isConnected ? 'LÀM MỚI' : 'KẾT NỐI'}
+                            </button>
+                        </div>
+                    </div>
+
+                    <PathInput label="File Giọng Mẫu (WAV)" value={config.refAudio} onChange={v => setConfig({...config, refAudio: v})} isFile={true} filters={[{name: 'Audio', extensions:['wav']}]} />
+                    
+                    <div className="mb-3">
+                        <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Nội dung giọng mẫu (Prompt Text):</label>
+                        <textarea value={config.refText} onChange={e => setConfig({...config, refText: e.target.value})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 h-16 outline-none focus:border-orange-500 resize-none" />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Ngôn ngữ mẫu:</label>
+                            <select value={config.refLang} onChange={e => setConfig({...config, refLang: e.target.value})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none cursor-pointer">
+                                <option value="vi">Tiếng Việt</option>
+                                <option value="en">Tiếng Anh</option>
+                                <option value="zh">Tiếng Trung</option>
+                                <option value="ja">Tiếng Nhật</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Ngôn ngữ cần đọc:</label>
+                            <select value={config.targetLang} onChange={e => setConfig({...config, targetLang: e.target.value})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none cursor-pointer">
+                                <option value="vi">Tiếng Việt</option>
+                                <option value="en">Tiếng Anh</option>
+                                <option value="zh">Tiếng Trung</option>
+                                <option value="ja">Tiếng Nhật</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-[#1e222b] p-4 rounded border border-gray-700 shadow-md">
+                    <h3 className="text-blue-400 font-bold text-sm mb-4 uppercase flex items-center gap-2"><Folder size={16}/> File & Output</h3>
+                    <PathInput label="Nội dung (.txt hoặc .srt)" value={config.inputPath} onChange={v => setConfig({...config, inputPath: v})} isFile={true} filters={[{name: 'Text/Sub', extensions:['txt', 'srt']}]} />
+                    <PathInput label="Thư mục lưu kết quả" value={config.outputFolder} onChange={v => setConfig({...config, outputFolder: v})} />
+                    <div className="mt-3">
+                        <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Định dạng xuất:</label>
+                        <select value={config.format} onChange={e => setConfig({...config, format: e.target.value})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none">
+                            <option value="wav">WAV (Chất lượng gốc)</option>
+                            <option value="mp3">MP3 (Nén nhẹ)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            {/* CỘT PHẢI: API SERVER & LOG TIẾN TRÌNH */}
+            <div className="w-1/2 flex flex-col gap-4 h-full">
+                {/* Cụm API SERVER (Phía trên bên phải) */}
+                <div className="bg-[#1e222b] p-4 rounded border border-gray-700 shadow-lg">
+                    <h3 className="text-green-500 font-bold text-sm mb-4 uppercase flex items-center gap-2"><Cpu size={16}/> API Server</h3>
+                    <div className="space-y-3">
+                        <PathInput label="Python EXE (Runtime)" value={serverConfig.pythonPath} onChange={v => {setServerConfig({...serverConfig, pythonPath: v}); localStorage.setItem('tts_py_path', v)}} isFile={true} />
+                        <PathInput label="File api_v2.py" value={serverConfig.apiScriptPath} onChange={v => {setServerConfig({...serverConfig, apiScriptPath: v}); localStorage.setItem('tts_script_path', v)}} isFile={true} />
+                        <button onClick={handleStartServer} disabled={isServerRunning} className={`w-full py-2.5 rounded font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md ${isServerRunning ? 'bg-gray-700 text-gray-400' : 'bg-green-700 hover:bg-green-600 text-white'}`}>
+                            {isServerRunning ? <RefreshCw className="animate-spin" size={14}/> : <Play size={14}/>}
+                            {isServerRunning ? "SERVER ĐANG CHẠY NGẦM" : "KHỞI ĐỘNG SERVER (GPU)"}
+                        </button>
+                    </div>
+                </div>
+
+                {/* Log hệ thống & Progress (Phía dưới bên phải) */}
+                <div className="bg-[#1e222b] p-5 rounded border border-gray-700 shadow-lg flex-1 flex flex-col overflow-hidden">
+                    <div className="flex items-center gap-2 mb-4 border-b border-gray-700 pb-2">
+                        <Mic className="text-orange-500" size={20} />
+                        <h3 className="font-bold text-gray-200 uppercase text-sm tracking-wider">Log hệ thống</h3>
+                    </div>
+
+                    {/* PROGRESS BAR */}
+                    {isRunning && (
+                        <div className="mb-4">
+                            <div className="flex justify-between text-[10px] text-gray-400 mb-1 font-bold">
+                                <span className="uppercase text-blue-400">Đang xử lý TTS...</span>
+                                <span>{progress}%</span>
+                            </div>
+                            <div className="w-full bg-gray-700 h-2 rounded-full overflow-hidden border border-gray-600">
+                                <div className="bg-blue-500 h-full transition-all duration-300 shadow-[0_0_10px_rgba(59,130,246,0.6)]" style={{ width: `${progress}%` }}></div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Ô LOG (Làm ngắn lại nhờ flex-1) */}
+                    <div className="bg-[#15171e] flex-1 rounded border border-gray-700 p-2 font-mono text-[10px] text-gray-400 relative overflow-hidden">
+                        <div className="absolute inset-0 overflow-y-auto custom-scrollbar p-2">
+                            {logs.length === 0 ? <div className="h-full flex items-center justify-center text-gray-600 italic">Sẵn sàng xử lý dữ liệu...</div> : logs.map((l, i) => <div key={i} className="mb-1 border-b border-gray-800/50 pb-1">{l}</div>)}
+                        </div>
+                    </div>
+
+                    <button 
+                        onClick={handleStart} 
+                        disabled={isRunning || !isConnected}
+                        className={`w-full mt-4 py-4 rounded font-bold text-sm uppercase tracking-widest shadow-xl flex items-center justify-center gap-3 transition-all ${(!isConnected || isRunning) ? 'bg-gray-700 text-gray-500' : 'bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white'}`}
+                    >
+                        {isRunning ? <Loader className="animate-spin" size={20} /> : <Zap size={20} />}
+                        {isRunning ? `ĐANG CHẠY (${progress}%)` : "BẮT ĐẦU TTS"}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // --- SETTINGS TAB (UPDATED V1.0.0) ---
 const SettingsTab = () => {
     return (
@@ -821,7 +1009,8 @@ export default function App() {
       { id: 'dedup', label: 'Dedup', icon: Filter }, 
       { id: 'convert-9-16', label: 'Convert 9:16', icon: LayoutTemplate }, 
       { id: 'mix-video', label: 'Mix Video', icon: Video }, 
-      { id: 'sync-video', label: 'Merge', icon: Zap }, 
+      { id: 'sync-video', label: 'Merge', icon: Zap },
+      { id: 'tts', label: 'TTS', icon: Mic }, 
       { id: 'settings', label: 'Settings', icon: Settings } 
   ];
 
@@ -831,7 +1020,8 @@ export default function App() {
           case 'dedup': return <DedupTab />; 
           case 'convert-9-16': return <Convert9to16Tab />; 
           case 'mix-video': return <MixVideoTab />; 
-          case 'sync-video': return <SyncVideoTab />; 
+          case 'sync-video': return <SyncVideoTab />;
+          case 'tts': return <TTSTab />; 
           case 'settings': return <SettingsTab />; 
           default: return null; 
       } 
