@@ -1,6 +1,6 @@
 {
   "name": "dvmix",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Video Automation Tool AV1",
   "main": "electron/main.js",
   "scripts": {

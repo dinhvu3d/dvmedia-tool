@@ -1,14 +1,39 @@
-import customtkinter as ctk
-from tkinter import filedialog, messagebox
 import os
+import sys
+import subprocess
 import json
 import threading
+import time
+import socket
+
+# --- AUTO INSTALL DEPENDENCIES ---
+def ensure_library(package_name, import_name=None):
+    if not import_name: import_name = package_name
+    try:
+        __import__(import_name)
+    except ImportError:
+        try:
+            # Gửi log JSON nếu chạy từ Electron, hoặc print thường nếu chạy CMD
+            msg = f"Đang tự động cài đặt thư viện thiếu: {package_name}..."
+            if len(sys.argv) > 1: print(json.dumps({"type": "log", "message": msg}), flush=True)
+            else: print(msg)
+            
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
+        except Exception as e:
+            err_msg = f"Lỗi cài đặt {package_name}: {e}"
+            if len(sys.argv) > 1: print(json.dumps({"type": "log", "message": err_msg}), flush=True)
+            else: print(err_msg)
+
+ensure_library("requests")
+ensure_library("pysrt")
+ensure_library("pydub")
+ensure_library("customtkinter")
+
 import requests
 import pysrt
 from pydub import AudioSegment
-import time
-import subprocess
-import socket
+import customtkinter as ctk
+from tkinter import filedialog, messagebox
 
 # --- CẤU HÌNH MẶC ĐỊNH ---
 CONFIG_FILE = "dvmaker_config.json"

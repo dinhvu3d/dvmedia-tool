@@ -927,7 +927,14 @@ ipcMain.handle('backend:startTTS', async (event, config) => {
 
     return new Promise((resolve) => {
         let isResolved = false;
-        const pythonEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+        
+        // Thêm đường dẫn chứa ffmpeg vào PATH để pydub tìm thấy
+        const resourceDir = app.isPackaged ? process.resourcesPath : path.join(__dirname, '../');
+        const pythonEnv = { 
+            ...process.env, 
+            PYTHONIOENCODING: 'utf-8',
+            PATH: `${process.env.PATH}${path.delimiter}${resourceDir}`
+        };
         
         // Khởi chạy engine xử lý
         ttsRunProcess = spawn('python', ['-u', scriptPath, JSON.stringify(config)], { env: pythonEnv });
