@@ -5,7 +5,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const fluentFfmpeg = require('fluent-ffmpeg');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const http = require('http');
 
 // ==========================================
@@ -889,12 +889,35 @@ ipcMain.handle('tts:startServer', async (event, { pythonPath, apiScriptPath }) =
         const workingDir = path.dirname(apiScriptPath);
         ttsServerProcess = spawn(pythonPath, [apiScriptPath], { 
             cwd: workingDir,
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
             windowsHide: true,
             creationflags: 0x08000000 
         });
+        
+        // Lắng nghe log từ API Server để debug lỗi (quan trọng)
+        ttsServerProcess.stdout.on('data', (data) => sendLog(`[API] ${data.toString()}`));
+        ttsServerProcess.stderr.on('data', (data) => sendLog(`[API-ERR] ${data.toString()}`));
+
         // Đợi 5s để server load model vào GPU
         setTimeout(() => resolve({ success: true }), 5000);
     });
+});
+
+// 2. Handler Stop Server (Mới)
+ipcMain.handle('tts:stopServer', async () => {
+    if (ttsServerProcess) {
+        try {
+            // Dùng taskkill trên Windows để đảm bảo kill sạch cả process con (Tree)
+            if (process.platform === 'win32') {
+                exec(`taskkill /pid ${ttsServerProcess.pid} /f /t`);
+            } else {
+                ttsServerProcess.kill();
+            }
+            ttsServerProcess = null;
+            return { success: true };
+        } catch (e) { return { success: false, error: e.message }; }
+    }
+    return { success: true };
 });
 
 // 2. Handler chính chạy TTS (Lệnh mà bạn đang bị báo lỗi)

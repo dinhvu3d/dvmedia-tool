@@ -20,7 +20,7 @@ const PathInput = ({ label, placeholder, value, onChange, isFile = false, isSave
             if(path) onChange(path); 
         } 
     };
-    return ( <div className="mb-3"> <label className="block text-gray-500 text-xs font-bold mb-1 font-mono uppercase">{label}:</label> <div className="flex gap-2"> <input type="text" className="flex-1 bg-[#1e222b] border border-gray-600 text-gray-300 text-xs rounded px-3 py-2 focus:border-orange-500 focus:text-white transition-colors" placeholder={placeholder} value={value} onChange={(e) => onChange(e.target.value)} /> <button onClick={handleSelect} className={`bg-[#2a2e3b] hover:bg-[#363b4b] border border-gray-600 text-gray-300 px-3 rounded text-xs whitespace-nowrap font-bold flex items-center gap-2`}> {isSave ? <Save size={14}/> : <Folder size={14}/>} Browse</button> </div> </div> );
+    return ( <div className="mb-3"> <label className="block text-gray-500 text-xs font-bold mb-1 font-mono uppercase">{label}:</label> <div className="flex gap-2"> <input type="text" className="flex-1 bg-[#1e222b] border border-gray-600 text-gray-300 text-xs rounded px-3 py-2 focus:border-orange-500 focus:text-white transition-colors" placeholder={placeholder} value={value} onChange={(e) => onChange(e.target.value.replace(/"/g, ''))} /> <button onClick={handleSelect} className={`bg-[#2a2e3b] hover:bg-[#363b4b] border border-gray-600 text-gray-300 px-3 rounded text-xs whitespace-nowrap font-bold flex items-center gap-2`}> {isSave ? <Save size={14}/> : <Folder size={14}/>} Browse</button> </div> </div> );
 };
 
 const SidebarItem = ({ icon: Icon, label, isActive, onClick }) => ( <div onClick={onClick} className={`group flex items-center gap-3 px-4 py-3 cursor-pointer transition-all mb-1 ${isActive ? 'bg-[#3d2b1f] text-orange-500 border-l-2 border-orange-500' : 'text-gray-400 hover:bg-[#252a38] hover:text-gray-200'}`}> <Icon size={18} /> <span className="font-medium text-sm">{label}</span> </div> );
@@ -726,9 +726,9 @@ const TTSTab = () => {
             return saved ? JSON.parse(saved) : {
                 apiUrl: 'http://127.0.0.1:9880',
                 refAudio: '', refText: '', refLang: 'vi', targetLang: 'vi',
-                inputPath: '', outputFolder: '', format: 'wav'
+                inputPath: '', outputFolder: '', format: 'wav', outputFilename: ''
             };
-        } catch { return { apiUrl: 'http://127.0.0.1:9880', refAudio: '', refText: '', refLang: 'vi', targetLang: 'vi', inputPath: '', outputFolder: '', format: 'wav' }; }
+        } catch { return { apiUrl: 'http://127.0.0.1:9880', refAudio: '', refText: '', refLang: 'vi', targetLang: 'vi', inputPath: '', outputFolder: '', format: 'wav', outputFilename: '' }; }
     });
 
     // 2. Khởi tạo State cấu hình Server
@@ -776,8 +776,23 @@ const TTSTab = () => {
         setTimeout(checkConnection, 5000); // Tự động check sau 5s
     };
 
+    const handleStopServer = async () => {
+        if(window.electronAPI && window.electronAPI.stopServer) {
+            setLogs(p => [">>> Đang dừng API Server...", ...p]);
+            await window.electronAPI.stopServer();
+            setIsServerRunning(false);
+            setIsConnected(false);
+            setLogs(p => [">>> Server đã dừng.", ...p]);
+        }
+    };
+
     const handleStart = async () => {
         if (!isConnected) return alert("Vui lòng kết nối API Server trước!");
+        if (!config.refAudio) return alert("Chưa chọn File Giọng Mẫu!");
+        if (!config.refText || !config.refText.trim()) return alert("Chưa nhập Nội dung giọng mẫu!");
+        if (!config.inputPath) return alert("Chưa chọn File Nội dung cần đọc!");
+        if (!config.outputFolder) return alert("Chưa chọn Thư mục lưu kết quả!");
+
         setIsRunning(true); setProgress(0);
         setLogs(p => [">>> Bắt đầu gửi yêu cầu TTS...", ...p]);
         const res = await window.electronAPI.startTTS(config);
@@ -811,7 +826,7 @@ const TTSTab = () => {
                     
                     <div className="mb-3">
                         <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Nội dung giọng mẫu (Prompt Text):</label>
-                        <textarea value={config.refText} onChange={e => setConfig({...config, refText: e.target.value})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 h-16 outline-none focus:border-orange-500 resize-none" />
+                        <textarea value={config.refText} onChange={e => setConfig({...config, refText: e.target.value.replace(/[\r\n]+/g, ' ')})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 h-16 outline-none focus:border-orange-500 resize-none" />
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
@@ -840,6 +855,15 @@ const TTSTab = () => {
                     <h3 className="text-blue-400 font-bold text-sm mb-4 uppercase flex items-center gap-2"><Folder size={16}/> File & Output</h3>
                     <PathInput label="Nội dung (.txt hoặc .srt)" value={config.inputPath} onChange={v => setConfig({...config, inputPath: v})} isFile={true} filters={[{name: 'Text/Sub', extensions:['txt', 'srt']}]} />
                     <PathInput label="Thư mục lưu kết quả" value={config.outputFolder} onChange={v => setConfig({...config, outputFolder: v})} />
+                    
+                    <div className="mt-3">
+                        <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Tên file xuất (Tùy chọn):</label>
+                        <div className="flex gap-2 items-center">
+                            <input type="text" value={config.outputFilename || ''} onChange={e => setConfig({...config, outputFilename: e.target.value})} className="flex-1 bg-[#15171e] border border-gray-600 text-white text-xs rounded px-3 py-2 outline-none focus:border-orange-500" placeholder="Mặc định: Tên_Input_tts" />
+                            <div className="bg-[#2a2e3b] border border-gray-600 text-gray-400 text-xs rounded px-3 py-2 font-bold">.{config.format}</div>
+                        </div>
+                    </div>
+
                     <div className="mt-3">
                         <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Định dạng xuất:</label>
                         <select value={config.format} onChange={e => setConfig({...config, format: e.target.value})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none">
@@ -858,9 +882,9 @@ const TTSTab = () => {
                     <div className="space-y-3">
                         <PathInput label="Python EXE (Runtime)" value={serverConfig.pythonPath} onChange={v => {setServerConfig({...serverConfig, pythonPath: v}); localStorage.setItem('tts_py_path', v)}} isFile={true} />
                         <PathInput label="File api_v2.py" value={serverConfig.apiScriptPath} onChange={v => {setServerConfig({...serverConfig, apiScriptPath: v}); localStorage.setItem('tts_script_path', v)}} isFile={true} />
-                        <button onClick={handleStartServer} disabled={isServerRunning} className={`w-full py-2.5 rounded font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md ${isServerRunning ? 'bg-gray-700 text-gray-400' : 'bg-green-700 hover:bg-green-600 text-white'}`}>
-                            {isServerRunning ? <RefreshCw className="animate-spin" size={14}/> : <Play size={14}/>}
-                            {isServerRunning ? "SERVER ĐANG CHẠY NGẦM" : "KHỞI ĐỘNG SERVER (GPU)"}
+                        <button onClick={isServerRunning ? handleStopServer : handleStartServer} className={`w-full py-2.5 rounded font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md ${isServerRunning ? 'bg-red-700 hover:bg-red-600 text-white' : 'bg-green-700 hover:bg-green-600 text-white'}`}>
+                            {isServerRunning ? <Ban size={14}/> : <Play size={14}/>}
+                            {isServerRunning ? "DỪNG SERVER (KILL)" : "KHỞI ĐỘNG SERVER (GPU)"}
                         </button>
                     </div>
                 </div>
@@ -941,7 +965,7 @@ const SettingsTab = () => {
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <span className="text-[10px] text-gray-500 block uppercase font-bold">Version:</span>
-                                <span className="text-sm font-bold">v1.0.1</span>
+                                <span className="text-sm font-bold">v1.0.2</span>
                             </div>
                             <div>
                                 <span className="text-[10px] text-gray-500 block uppercase font-bold">Engine Status:</span>

@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // --- NEW: SYNC VIDEO (ĐÃ FIX) ---
   analyzeSync: (data) => ipcRenderer.invoke('backend:analyzeSync', data),
+  stopAnalyzeSync: () => ipcRenderer.invoke('backend:stopAnalyzeSync'),
   
   // FIX LỖI Ở ĐÂY: Trả về hàm removeListener để React không bị crash
   onSyncProgress: (cb) => {
@@ -68,6 +69,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // --- NEW: SYNC VIDEO (RENDER) ---
   renderSync: (data) => ipcRenderer.invoke('backend:renderSync', data),
+  stopRenderSync: () => ipcRenderer.invoke('backend:stopRenderSync'),
   onRenderProgress: (cb) => {
       const listener = (e, v) => cb(v);
       ipcRenderer.on('render-progress', listener);

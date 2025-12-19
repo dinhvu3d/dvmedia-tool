@@ -548,7 +548,14 @@ if __name__ == "__main__":
             if not output_folder.exists():
                 output_folder.mkdir(parents=True, exist_ok=True)
 
-            output_file = output_folder / f"{input_path.stem}_tts.{out_format}"
+            custom_name = params.get('outputFilename', '').strip()
+            if custom_name:
+                if custom_name.lower().endswith(f".{out_format}"):
+                    output_file = output_folder / custom_name
+                else:
+                    output_file = output_folder / f"{custom_name}.{out_format}"
+            else:
+                output_file = output_folder / f"{input_path.stem}_tts.{out_format}"
 
             def electron_log(msg, percent=None):
                 # Gửi log chữ
