@@ -893,6 +893,8 @@ ipcMain.handle('backend:renderSync', async (e, { inputs, config, analysisData })
 let ttsServerProcess = null;
 let ttsRunProcess = null;
 let voicevoxProcess = null; // Add this for VOICEVOX
+let fishServerProcess = null; // Add this for Fish Speech
+let fishTtsProcess = null;    // Add this for Fish Speech TTS process
 
 // 1. Handler Khởi động Server GPT-SoVITS ngầm
 ipcMain.handle('tts:startServer', async (event, { pythonPath, apiScriptPath }) => {
@@ -978,6 +980,119 @@ ipcMain.handle('backend:startTTS', async (event, config) => {
             }
         });
     });
+});
+
+// --- FISH SPEECH HANDLERS ---
+ipcMain.handle('fspeech:start-server', async (e, { pythonPath, rootPath, llamaPath, decoderPath }) => {
+    if (fishServerProcess) return { success: true, message: "Fish Speech Server is already running." };
+    if (!fs.existsSync(pythonPath) || !fs.existsSync(rootPath)) return { success: false, message: "Invalid Path." };
+
+    return new Promise((resolve) => {
+        const cmdArgs = [
+            "-m", "tools.api_server",
+            "--listen", "127.0.0.1:8080",
+            "--device", "cuda",
+            "--llama-checkpoint-path", path.resolve(rootPath, llamaPath),
+            "--decoder-checkpoint-path", path.resolve(rootPath, decoderPath)
+        ];
+
+        sendLog(`[FSPEECH] Starting Server in ${rootPath}...`);
+        let isResolved = false;
+        fishServerProcess = spawn(pythonPath, cmdArgs, { 
+            cwd: rootPath,
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+            windowsHide: true,
+            creationflags: 0x08000000 
+        });
+
+        const startupListener = (data) => {
+            const log = data.toString();
+            sendLog(`[FS-SRV] ${log}`);
+            if (log.includes('Uvicorn running on') && !isResolved) {
+                isResolved = true;
+                if (fishServerProcess) fishServerProcess.stdout.removeListener('data', startupListener);
+                resolve({ success: true });
+            }
+        };
+        fishServerProcess.stdout.on('data', startupListener);
+        fishServerProcess.stderr.on('data', (data) => sendLog(`[FS-ERR] ${data.toString()}`));
+
+        setTimeout(() => {
+            if (!isResolved) {
+                isResolved = true;
+                if (fishServerProcess) fishServerProcess.stdout.removeListener('data', startupListener);
+                resolve({ success: true, message: "Server started, but success message not detected." });
+            }
+        }, 15000);
+    });
+});
+
+ipcMain.handle('fspeech:stop-server', async () => {
+    if (fishServerProcess) {
+        try {
+            if (process.platform === 'win32') exec(`taskkill /pid ${fishServerProcess.pid} /f /t`);
+            else fishServerProcess.kill();
+            fishServerProcess = null;
+            sendLog('[FSPEECH] Server stopped.');
+        } catch (e) { return { success: false, message: e.message }; }
+    }
+    return { success: true };
+});
+
+ipcMain.handle('fspeech:generate', async (e, config) => {
+    const scriptPath = resolveResource('tts_engine.py');
+    if (!fs.existsSync(scriptPath)) return { success: false, message: "Engine script not found." };
+
+    return new Promise((resolve) => {
+        let isResolved = false;
+        const pythonEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+        // Add resource path to PATH for pydub/ffmpeg
+        const resourceDir = app.isPackaged ? process.resourcesPath : path.join(__dirname, '../');
+        pythonEnv.PATH = `${process.env.PATH}${path.delimiter}${resourceDir}`;
+
+        const pyConfig = { ...config, task: 'fish-speech' };
+        fishTtsProcess = spawn('python', ['-u', scriptPath, JSON.stringify(pyConfig)], { env: pythonEnv });
+
+        fishTtsProcess.stdout.on('data', (data) => {
+            const lines = data.toString().split('\n');
+            lines.forEach(line => {
+                const trimmed = line.trim();
+                if (!trimmed) return;
+                try {
+                    const msg = JSON.parse(trimmed);
+                    if (msg.type === 'log') sendLog(msg.message);
+                    if (msg.type === 'progress' && mainWindow) {
+                        mainWindow.webContents.send('tts-progress', msg.percent);
+                    }
+                    if (msg.type === 'done' && !isResolved) {
+                        isResolved = true;
+                        resolve({ success: true, message: msg.message });
+                    }
+                } catch (e) { sendLog(trimmed); }
+            });
+        });
+
+        fishTtsProcess.stderr.on('data', (data) => sendLog(`[FS-PY-ERR] ${data.toString()}`));
+
+        fishTtsProcess.on('close', (code) => {
+            fishTtsProcess = null;
+            if (!isResolved) {
+                isResolved = true;
+                resolve(code === 0 ? { success: true, message: 'Process finished.' } : { success: false, message: `Process exited with code ${code}` });
+            }
+        });
+    });
+});
+
+ipcMain.handle('fspeech:stop-tts', async () => {
+    if (fishTtsProcess) {
+        try {
+            fishTtsProcess.kill();
+        } finally {
+            fishTtsProcess = null;
+        }
+    }
+    return { success: true };
 });
 
 // --- JP VOICE (VOICEVOX) ---

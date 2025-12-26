@@ -291,6 +291,87 @@ class DVMakerLogic:
         else:
             combined_audio.export(output_path, format="wav")
 
+# --- LOGIC XỬ LÝ (FISH SPEECH) ---
+class FishSpeechLogic:
+    def __init__(self, api_url="http://127.0.0.1:8080"):
+        self.api_url = api_url
+
+    def start_fish_server(self, python_path, root_dir):
+        """
+        Hàm khởi động Server Fish Speech (Dùng cho Tkinter hoặc tham khảo logic).
+        Lưu ý: Electron App sẽ dùng logic riêng trong main.js để quản lý process tốt hơn.
+        """
+        cmd = [
+            python_path, "-m", "tools.api_server",
+            "--listen", "127.0.0.1:8080",
+            "--device", "cuda",
+            "--llama-checkpoint-path", os.path.join(root_dir, "checkpoints/fish-speech-1.5"),
+            "--decoder-checkpoint-path", os.path.join(root_dir, "checkpoints/fish-speech-1.5/firefly-gan-vq-fsq-8x1024-21hz-generator.pth")
+        ]
+        return subprocess.Popen(cmd, cwd=root_dir)
+
+    def fish_speech_tts(self, text, ref_audio_path, ref_text, output_path):
+        ensure_library("msgpack")
+        import msgpack
+
+        url = f"{self.api_url}/v1/tts"
+        
+        with open(ref_audio_path, "rb") as f:
+            ref_audio_content = f.read()
+
+        # Payload chuẩn cho Fish Speech 1.5 API
+        data = { "text": text, "references": [{ "audio": ref_audio_content, "text": ref_text }], "reference_id": None, "normalize": True, "format": "wav", "mp3_bitrate": 64, "opus_bitrate": -1000 }
+        
+        headers = {"Content-Type": "application/msgpack"}
+        packed_data = msgpack.packb(data)
+        
+        response = requests.post(url, data=packed_data, headers=headers, stream=True)
+        
+        if response.status_code == 200:
+            with open(output_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        else:
+            raise Exception(f"Fish Speech API Error ({response.status_code}): {response.text}")
+
+    def process_srt(self, srt_path, output_path, ref_audio_path, ref_text, format="wav", progress_callback=None):
+        subs = pysrt.open(srt_path)
+        combined_audio = AudioSegment.silent(duration=0)
+        
+        if len(subs) > 0:
+            last_end_time = subs[-1].end.ordinal
+            combined_audio = AudioSegment.silent(duration=last_end_time + 2000)
+
+        for i, sub in enumerate(subs):
+            text = sub.text.replace("\n", " ").strip()
+            if not text:
+                continue
+                
+            if progress_callback:
+                progress_callback(f"Đang xử lý dòng {i+1}/{len(subs)}: {text[:30]}...", percent=round(((i+1)/len(subs))*100))
+
+            try:
+                temp_output_file = f"temp_fspeech_{i}.wav"
+                self.fish_speech_tts(text, ref_audio_path, ref_text, temp_output_file)
+                
+                segment = AudioSegment.from_wav(temp_output_file)
+                os.remove(temp_output_file)
+                
+                start_time = sub.start.ordinal
+                combined_audio = combined_audio.overlay(segment, position=start_time)
+                
+            except Exception as e:
+                error_msg = f"Lỗi dòng {i+1}: {e}"
+                if progress_callback:
+                    progress_callback(error_msg)
+                else:
+                    print(error_msg)
+        
+        if format == "mp3":
+            combined_audio.export(output_path, format="mp3", bitrate="192k")
+        else:
+            combined_audio.export(output_path, format="wav")
+
 # --- GIAO DIỆN NGƯỜI DÙNG (FRONTEND) ---
 class DVMakerApp(ctk.CTk):
     def __init__(self):
@@ -322,7 +403,7 @@ class DVMakerApp(ctk.CTk):
         self.tab_view = ctk.CTkTabview(self, width=500, height=50)
         self.tab_view.grid(row=1, column=0, pady=10, sticky="nsew", padx=20)
         
-        self.tab_tts = self.tab_view.add("GSpeech")
+        self.tab_tts = self.tab_view.add("TTS (Đọc văn bản)")
         self.tab_train = self.tab_view.add("Model Train (Huấn luyện)")
 
         self.setup_tts_tab()
@@ -350,7 +431,7 @@ class DVMakerApp(ctk.CTk):
         frame_left = ctk.CTkFrame(self.tab_tts, fg_color="transparent")
         frame_left.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
-        ctk.CTkLabel(frame_left, text="0. START SERVER (GPU):", font=("Arial", 14, "bold")).pack(anchor="w", pady=(0,5))
+        ctk.CTkLabel(frame_left, text="0. Khởi động Server (api_v2.py):", font=("Arial", 14, "bold")).pack(anchor="w", pady=(0,5))
         
         bat_frame = ctk.CTkFrame(frame_left, fg_color="transparent")
         bat_frame.pack(fill="x", pady=(0, 5))
@@ -360,7 +441,8 @@ class DVMakerApp(ctk.CTk):
         self.entry_script.pack(side="left", fill="x", expand=True, padx=(0, 5))
         
         ctk.CTkButton(bat_frame, text="...", width=30, command=self.browse_script).pack(side="right")
-        ctk.CTkButton(frame_left, text="START SERVER (GPU)", command=self.run_server_thread, fg_color="green").pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkButton(frame_left, text="KHỞI ĐỘNG SERVER", command=self.run_server_thread, fg_color="green").pack(fill="x", pady=(0, 15))
 
         ctk.CTkLabel(frame_left, text="1. Cấu hình GPT-SoVITS API:", font=("Arial", 14, "bold")).pack(anchor="w", pady=(0,5))
         self.entry_api = ctk.CTkEntry(frame_left, placeholder_text="Ví dụ: http://127.0.0.1:9880")
@@ -417,7 +499,7 @@ class DVMakerApp(ctk.CTk):
         self.textbox_log.pack(fill="both", expand=True, pady=(0, 10))
 
         # NÚT CHẠY
-        self.btn_run = ctk.CTkButton(frame_right, text="START GSPEECH", command=self.run_tts_thread, fg_color="#1f6aa5", height=50, font=("Arial", 16, "bold"))
+        self.btn_run = ctk.CTkButton(frame_right, text="BẮT ĐẦU ĐỌC (TTS)", command=self.run_tts_thread, fg_color="#1f6aa5", height=50, font=("Arial", 16, "bold"))
         self.btn_run.pack(fill="x")
 
     def setup_train_tab(self):
@@ -641,7 +723,7 @@ Sau khi xong, quay lại Tool này, vào Tab TTS và bấm "Làm mới" (nếu c
             self.log(f"❌ LỖI: {str(e)}")
             messagebox.showerror("Lỗi", str(e))
         finally:
-            self.btn_run.configure(state="normal", text="START GSPEECH")
+            self.btn_run.configure(state="normal", text="BẮT ĐẦU ĐỌC (TTS)")
 
     def run_train_thread(self):
         threading.Thread(target=self.process_train, daemon=True).start()
@@ -727,6 +809,33 @@ if __name__ == "__main__":
                         str(input_path), str(output_file), speaker_id,
                         format=out_format, progress_callback=electron_log
                     )
+
+            # --- FISH SPEECH TASK ---
+            elif task == 'fish-speech':
+                logic = FishSpeechLogic(params.get('apiUrl', 'http://127.0.0.1:8080'))
+                electron_log(f"Bắt đầu xử lý Fish Speech cho file: {input_path.name}")
+
+                if input_path.suffix.lower() == ".srt":
+                    logic.process_srt(
+                        str(input_path), str(output_file), 
+                        params['refAudio'], params['refText'],
+                        format=out_format, progress_callback=electron_log
+                    )
+                else: # TXT file
+                    with open(input_path, "r", encoding="utf-8") as f:
+                        text = f.read()
+                    
+                    electron_log("Đang đọc file văn bản và gửi yêu cầu API...")
+                    logic.fish_speech_tts(
+                        text, 
+                        params['refAudio'], 
+                        params['refText'], 
+                        str(output_file)
+                    )
+                    if out_format == "mp3":
+                        electron_log("Đang chuyển đổi sang MP3...")
+                        sound = AudioSegment.from_wav(str(output_file))
+                        sound.export(str(output_file), format="mp3")
 
             # --- GPT-SOVITS TASK ---
             else: # Default task

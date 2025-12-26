@@ -102,5 +102,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const listener = (e, v) => cb(v);
       ipcRenderer.on('jp-voice-progress', listener);
       return () => ipcRenderer.removeListener('jp-voice-progress', listener);
-  }
+  },
+
+  // FISH SPEECH
+  startFishServer: (config) => ipcRenderer.invoke('fspeech:start-server', config),
+  stopFishServer: () => ipcRenderer.invoke('fspeech:stop-server'),
+  generateFishSpeech: (config) => ipcRenderer.invoke('fspeech:generate', config),
+  stopFishSpeech: () => ipcRenderer.invoke('fspeech:stop-tts')
 });

@@ -1158,6 +1158,185 @@ const JPVoiceTab = () => {
     );
 };
 
+// --- FSPEECH TAB (FISH SPEECH) ---
+const FSpeechTab = () => {
+    // Server and Model Config
+    const [serverConfig, setServerConfig] = useState(() => {
+        const defaults = {
+            pythonPath: '',
+            rootPath: '',
+            llamaPath: 'checkpoints/fish-speech-1.5',
+            decoderPath: 'checkpoints/fish-speech-1.5/firefly-gan-vq-fsq-8x1024-21hz-generator.pth'
+        };
+        try {
+            const saved = localStorage.getItem('fs_server_config');
+            return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
+        } catch { return defaults; }
+    });
+
+    // TTS Settings
+    const [config, setConfig] = useState(() => {
+        const defaults = {
+            refAudio: '',
+            refText: '',
+            inputPath: '',
+            outputFolder: '',
+            outputFilename: '',
+            format: 'wav'
+        };
+        try {
+            const saved = localStorage.getItem('fs_config');
+            return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
+        } catch { return defaults; }
+    });
+
+    const [logs, setLogs] = useState([]);
+    const [isServerRunning, setIsServerRunning] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const isStopping = useRef(false);
+
+    // Save configs on change
+    useEffect(() => { localStorage.setItem('fs_server_config', JSON.stringify(serverConfig)); }, [serverConfig]);
+    useEffect(() => { localStorage.setItem('fs_config', JSON.stringify(config)); }, [config]);
+
+    useEffect(() => {
+        let cleanLog, cleanProgress;
+        if (window.electronAPI) {
+            cleanLog = window.electronAPI.onSystemLog(msg => setLogs(p => [msg, ...p]));
+            if (window.electronAPI.onTTSProgress) {
+                cleanProgress = window.electronAPI.onTTSProgress(p => setProgress(p));
+            }
+        }
+        return () => { if (cleanLog) cleanLog(); if (cleanProgress) cleanProgress(); };
+    }, []);
+
+    const handleStartServer = async () => {
+        if (!serverConfig.pythonPath || !serverConfig.rootPath) return alert("Please select Python Runtime and FSpeech Root Folder!");
+        setIsServerRunning(true);
+        setLogs(p => [">>> Starting FSpeech API Server...", ...p]);
+        if (window.electronAPI) await window.electronAPI.startFishServer(serverConfig);
+    };
+
+    const handleStopServer = async () => {
+        if (window.electronAPI) {
+            setLogs(p => [">>> Stopping FSpeech API Server...", ...p]);
+            await window.electronAPI.stopFishServer();
+            setIsServerRunning(false);
+        }
+    };
+
+    const handleStartFSpeech = async () => {
+        if (!isServerRunning) return alert("Please START SERVER first!");
+        if (!config.refAudio || !config.refText || !config.inputPath || !config.outputFolder) {
+            return alert("Please fill all required fields: Reference Audio, Reference Text, Input Content, and Output Folder.");
+        }
+        
+        isStopping.current = false;
+        setIsProcessing(true);
+        setProgress(0);
+        setLogs(p => [">>> Starting FSpeech process...", ...p]);
+
+        if (window.electronAPI) {
+            const res = await window.electronAPI.generateFishSpeech(config);
+            if (!isStopping.current && res.success) {
+                alert(res.message);
+            }
+        }
+        setIsProcessing(false);
+    };
+
+    const handleStopFSpeech = async () => {
+        isStopping.current = true;
+        setLogs(p => [">>> Stopping FSpeech...", ...p]);
+        if (window.electronAPI && window.electronAPI.stopFishSpeech) {
+            await window.electronAPI.stopFishSpeech();
+        }
+        setIsProcessing(false);
+    };
+
+    return (
+        <div className="max-w-5xl mx-auto flex gap-6 h-full pb-4">
+            {/* LEFT COLUMN */}
+            <div className="w-1/2 flex flex-col gap-3 h-full overflow-y-auto custom-scrollbar pr-1">
+                <div className="bg-[#1e222b] p-4 rounded border border-gray-700 shadow-md">
+                    <h3 className="text-orange-500 font-bold text-sm mb-4 uppercase">FSPEECH SETTINGS</h3>
+                    <PathInput label="Llama Model Path" value={serverConfig.llamaPath} onChange={v => setServerConfig({...serverConfig, llamaPath: v})} />
+                    <PathInput label="Decoder Path (.pth)" value={serverConfig.decoderPath} onChange={v => setServerConfig({...serverConfig, decoderPath: v})} isFile={true} filters={[{name: 'PyTorch Model', extensions:['pth']}]} />
+                    <PathInput label="Reference Audio (.wav/mp3)" value={config.refAudio} onChange={v => setConfig({...config, refAudio: v})} isFile={true} filters={[{name: 'Audio', extensions:['wav', 'mp3']}]} />
+                    <div className="mb-3"><label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Reference Text (Subtitle):</label><textarea value={config.refText} onChange={e => setConfig({...config, refText: e.target.value})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 h-16 outline-none focus:border-blue-500 resize-none" placeholder="Enter the text content of the reference audio..." /></div>
+                </div>
+                <div className="bg-[#1e222b] p-4 rounded border border-gray-700 shadow-md">
+                    <h3 className="text-blue-400 font-bold text-sm mb-4 uppercase flex items-center gap-2"><Folder size={16}/> File & Output</h3>
+                    <PathInput label="Input Content (.txt or .srt)" value={config.inputPath} onChange={v => setConfig({...config, inputPath: v})} isFile={true} filters={[{name: 'Text/Sub', extensions:['txt', 'srt']}]} />
+                    <PathInput label="Output Folder" value={config.outputFolder} onChange={v => setConfig({...config, outputFolder: v})} />
+                    <div className="mt-3">
+                        <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Output Filename (Optional):</label>
+                        <div className="flex gap-2 items-center">
+                            <input type="text" value={config.outputFilename || ''} onChange={e => setConfig({...config, outputFilename: e.target.value})} className="flex-1 bg-[#15171e] border border-gray-600 text-white text-xs rounded px-3 py-2 outline-none focus:border-orange-500" placeholder="Default: [Input_Name]_fspeech" />
+                            <div className="bg-[#2a2e3b] border border-gray-600 text-gray-400 text-xs rounded px-3 py-2 font-bold">.{config.format}</div>
+                        </div>
+                    </div>
+                    <div className="mt-3">
+                        <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Output Format:</label>
+                        <select value={config.format} onChange={e => setConfig({...config, format: e.target.value})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none">
+                            <option value="wav">WAV (Original Quality)</option>
+                            <option value="mp3">MP3 (Compressed)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            {/* RIGHT COLUMN */}
+            <div className="w-1/2 flex flex-col gap-4 h-full">
+                <div className="bg-[#1e222b] p-4 rounded border border-gray-700 shadow-lg">
+                    <h3 className="text-green-500 font-bold text-sm mb-4 uppercase flex justify-between items-center">
+                        <div className="flex items-center gap-2"><Cpu size={16}/> API SERVER & MODEL CONFIG</div>
+                        <span className={`text-[10px] px-2 py-0.5 rounded ${isServerRunning ? 'bg-green-600/20 text-green-500' : 'bg-red-600/20 text-red-500'}`}>{isServerRunning ? '● RUNNING' : '● OFFLINE'}</span>
+                    </h3>
+                    <div className="space-y-3">
+                        <PathInput label="Python Runtime (python.exe)" value={serverConfig.pythonPath} onChange={v => setServerConfig({...serverConfig, pythonPath: v})} isFile={true} filters={[{name: 'Executable', extensions:['exe']}]} />
+                        <PathInput label="FSpeech Root Folder" value={serverConfig.rootPath} onChange={v => setServerConfig({...serverConfig, rootPath: v})} />
+                        <button onClick={isServerRunning ? handleStopServer : handleStartServer} className={`w-full py-2.5 rounded font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md ${isServerRunning ? 'bg-red-700 hover:bg-red-600 text-white' : 'bg-green-700 hover:bg-green-600 text-white'}`}>
+                            {isServerRunning ? <Ban size={14}/> : <Play size={14}/>}
+                            {isServerRunning ? "STOP SERVER (GPU)" : "START SERVER (GPU)"}
+                        </button>
+                    </div>
+                </div>
+                <div className="bg-[#1e222b] p-5 rounded border border-gray-700 shadow-lg flex-1 flex flex-col overflow-hidden">
+                    <div className="flex items-center gap-2 mb-4 border-b border-gray-700 pb-2">
+                        <Mic className="text-orange-500" size={20} />
+                        <h3 className="font-bold text-gray-200 uppercase text-sm tracking-wider">System Logs</h3>
+                    </div>
+                    {isProcessing && (
+                        <div className="mb-4">
+                            <div className="flex justify-between text-[10px] text-gray-400 mb-1 font-bold">
+                                <span className="uppercase text-blue-400">Processing FSpeech...</span>
+                                <span>{progress}%</span>
+                            </div>
+                            <div className="w-full bg-gray-700 h-2 rounded-full overflow-hidden border border-gray-600">
+                                <div className="bg-blue-500 h-full transition-all duration-300 shadow-[0_0_10px_rgba(59,130,246,0.6)]" style={{ width: `${progress}%` }}></div>
+                            </div>
+                        </div>
+                    )}
+                    <div className="bg-[#15171e] flex-1 rounded border border-gray-700 p-2 font-mono text-[10px] text-gray-400 relative overflow-hidden">
+                        <div className="absolute inset-0 overflow-y-auto custom-scrollbar p-2">
+                            {logs.length === 0 ? <div className="h-full flex items-center justify-center text-gray-600 italic">Ready...</div> : logs.map((l, i) => <div key={i} className="mb-1 border-b border-gray-800/50 pb-1">{l}</div>)}
+                        </div>
+                    </div>
+                    <button 
+                        onClick={isProcessing ? handleStopFSpeech : handleStartFSpeech} 
+                        disabled={!isServerRunning && !isProcessing}
+                        className={`w-full mt-4 py-4 rounded font-bold text-sm uppercase tracking-widest shadow-xl flex items-center justify-center gap-3 transition-all ${(!isServerRunning && !isProcessing) ? 'bg-gray-700 text-gray-500' : (isProcessing ? 'bg-red-600 hover:bg-red-700' : 'bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800')} text-white`}
+                    >
+                        {isProcessing ? <Ban size={20} /> : <Zap size={20} />}
+                        {isProcessing ? "STOP FSPEECH" : "START FSPEECH"}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // --- SETTINGS TAB (UPDATED V1.0.0) ---
 const SettingsTab = () => {
     return (
@@ -1193,7 +1372,7 @@ const SettingsTab = () => {
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <span className="text-[10px] text-gray-500 block uppercase font-bold">Version:</span>
-                                <span className="text-sm font-bold">v1.0.2</span>
+                                <span className="text-sm font-bold">v1.0.4</span>
                             </div>
                             <div>
                                 <span className="text-[10px] text-gray-500 block uppercase font-bold">Engine Status:</span>
@@ -1263,6 +1442,7 @@ export default function App() {
       { id: 'mix-video', label: 'Mix Video', icon: Video }, 
       { id: 'sync-video', label: 'Merge', icon: Zap },
       { id: 'tts', label: 'GSpeech', icon: Mic }, 
+      { id: 'fspeech', label: 'FSpeech', icon: Mic },
       { id: 'jp-voice', label: 'JP Voice', icon: Mic }, 
       { id: 'settings', label: 'Settings', icon: Settings } 
   ];
@@ -1275,6 +1455,7 @@ export default function App() {
           case 'mix-video': return <MixVideoTab />; 
           case 'sync-video': return <SyncVideoTab />;
           case 'tts': return <TTSTab />; 
+          case 'fspeech': return <FSpeechTab />;
           case 'jp-voice': return <JPVoiceTab />; 
           case 'settings': return <SettingsTab />; 
           default: return null; 
