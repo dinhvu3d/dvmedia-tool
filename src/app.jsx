@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   FileVideo, Settings, Trash2, Video, Ban, 
   Loader, Download, ChevronDown, RefreshCw, Zap, 
@@ -742,6 +742,7 @@ const TTSTab = () => {
     const [isConnected, setIsConnected] = useState(false);
     const [isServerRunning, setIsServerRunning] = useState(false);
     const [progress, setProgress] = useState(0);
+    const isStopping = useRef(false);
 
     // Lưu config mỗi khi thay đổi
     useEffect(() => { localStorage.setItem('tts_config', JSON.stringify(config)); }, [config]);
@@ -756,6 +757,11 @@ const TTSTab = () => {
             }
         }
         return () => { if(cleanLog) cleanLog(); if(cleanProgress) cleanProgress(); };
+    }, []);
+
+    // Tự động kiểm tra kết nối khi mở tab
+    useEffect(() => {
+        checkConnection();
     }, []);
 
     // --- CÁC HÀM XỬ LÝ ---
@@ -793,10 +799,19 @@ const TTSTab = () => {
         if (!config.inputPath) return alert("Chưa chọn File Nội dung cần đọc!");
         if (!config.outputFolder) return alert("Chưa chọn Thư mục lưu kết quả!");
 
+        isStopping.current = false;
         setIsRunning(true); setProgress(0);
         setLogs(p => [">>> Bắt đầu gửi yêu cầu TTS...", ...p]);
         const res = await window.electronAPI.startTTS(config);
-        if (res.success) alert(res.message);
+        
+        if (!isStopping.current && res.success) alert(res.message);
+        setIsRunning(false);
+    };
+
+    const handleStop = async () => {
+        isStopping.current = true;
+        setLogs(p => [">>> Đang dừng GSpeech...", ...p]);
+        if(window.electronAPI && window.electronAPI.stopJPVoiceTTS) await window.electronAPI.stopJPVoiceTTS();
         setIsRunning(false);
     };
 
@@ -805,23 +820,8 @@ const TTSTab = () => {
             {/* CỘT TRÁI: CẤU HÌNH TEXT TO SPEECH */}
             <div className="w-1/2 flex flex-col gap-3 h-full overflow-y-auto custom-scrollbar pr-1">
                 <div className="bg-[#1e222b] p-4 rounded border border-gray-700 shadow-md">
-                    <h3 className="text-orange-500 font-bold text-sm mb-4 uppercase flex justify-between items-center">
-                        Text To Speech 
-                        <span className={`text-[10px] px-2 py-0.5 rounded ${isConnected ? 'bg-green-600/20 text-green-500' : 'bg-red-600/20 text-red-500'}`}>
-                            {isConnected ? '● ONLINE' : '● OFFLINE'}
-                        </span>
-                    </h3>
+                    <h3 className="text-orange-500 font-bold text-sm mb-4 uppercase">GSPEECH SETTINGS</h3>
                     
-                    <div className="mb-3">
-                        <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">API URL & Kết nối:</label>
-                        <div className="flex gap-2">
-                            <input type="text" value={config.apiUrl} onChange={e => setConfig({...config, apiUrl: e.target.value})} className="flex-1 bg-[#15171e] border border-gray-600 text-white text-xs rounded px-2 outline-none focus:border-orange-500" />
-                            <button onClick={checkConnection} className={`px-3 py-2 rounded text-[10px] font-bold ${isConnected ? 'bg-green-600' : 'bg-red-600'} text-white`}>
-                                {isConnected ? 'LÀM MỚI' : 'KẾT NỐI'}
-                            </button>
-                        </div>
-                    </div>
-
                     <PathInput label="File Giọng Mẫu (WAV)" value={config.refAudio} onChange={v => setConfig({...config, refAudio: v})} isFile={true} filters={[{name: 'Audio', extensions:['wav']}]} />
                     
                     <div className="mb-3">
@@ -878,13 +878,18 @@ const TTSTab = () => {
             <div className="w-1/2 flex flex-col gap-4 h-full">
                 {/* Cụm API SERVER (Phía trên bên phải) */}
                 <div className="bg-[#1e222b] p-4 rounded border border-gray-700 shadow-lg">
-                    <h3 className="text-green-500 font-bold text-sm mb-4 uppercase flex items-center gap-2"><Cpu size={16}/> API Server</h3>
+                    <h3 className="text-green-500 font-bold text-sm mb-4 uppercase flex justify-between items-center">
+                        <div className="flex items-center gap-2"><Cpu size={16}/> API Server</div>
+                        <span className={`text-[10px] px-2 py-0.5 rounded ${isConnected ? 'bg-green-600/20 text-green-500' : 'bg-red-600/20 text-red-500'}`}>
+                            {isConnected ? '● ONLINE' : '● OFFLINE'}
+                        </span>
+                    </h3>
                     <div className="space-y-3">
                         <PathInput label="Python EXE (Runtime)" value={serverConfig.pythonPath} onChange={v => {setServerConfig({...serverConfig, pythonPath: v}); localStorage.setItem('tts_py_path', v)}} isFile={true} />
                         <PathInput label="File api_v2.py" value={serverConfig.apiScriptPath} onChange={v => {setServerConfig({...serverConfig, apiScriptPath: v}); localStorage.setItem('tts_script_path', v)}} isFile={true} />
                         <button onClick={isServerRunning ? handleStopServer : handleStartServer} className={`w-full py-2.5 rounded font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-md ${isServerRunning ? 'bg-red-700 hover:bg-red-600 text-white' : 'bg-green-700 hover:bg-green-600 text-white'}`}>
                             {isServerRunning ? <Ban size={14}/> : <Play size={14}/>}
-                            {isServerRunning ? "DỪNG SERVER (KILL)" : "KHỞI ĐỘNG SERVER (GPU)"}
+                            {isServerRunning ? "STOP SERVER (GPU)" : "START SERVER (GPU)"}
                         </button>
                     </div>
                 </div>
@@ -917,12 +922,12 @@ const TTSTab = () => {
                     </div>
 
                     <button 
-                        onClick={handleStart} 
-                        disabled={isRunning || !isConnected}
-                        className={`w-full mt-4 py-4 rounded font-bold text-sm uppercase tracking-widest shadow-xl flex items-center justify-center gap-3 transition-all ${(!isConnected || isRunning) ? 'bg-gray-700 text-gray-500' : 'bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white'}`}
+                        onClick={isRunning ? handleStop : handleStart} 
+                        disabled={!isConnected && !isRunning}
+                        className={`w-full mt-4 py-4 rounded font-bold text-sm uppercase tracking-widest shadow-xl flex items-center justify-center gap-3 transition-all ${(!isConnected && !isRunning) ? 'bg-gray-700 text-gray-500' : (isRunning ? 'bg-red-600 hover:bg-red-700' : 'bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800')} text-white`}
                     >
-                        {isRunning ? <Loader className="animate-spin" size={20} /> : <Zap size={20} />}
-                        {isRunning ? `ĐANG CHẠY (${progress}%)` : "BẮT ĐẦU TTS"}
+                        {isRunning ? <Ban size={20} /> : <Zap size={20} />}
+                        {isRunning ? "STOP GSPEECH" : "START GSPEECH"}
                     </button>
                 </div>
             </div>
@@ -1257,7 +1262,7 @@ export default function App() {
       { id: 'convert-9-16', label: 'Convert 9:16', icon: LayoutTemplate }, 
       { id: 'mix-video', label: 'Mix Video', icon: Video }, 
       { id: 'sync-video', label: 'Merge', icon: Zap },
-      { id: 'tts', label: 'TTS', icon: Mic }, 
+      { id: 'tts', label: 'GSpeech', icon: Mic }, 
       { id: 'jp-voice', label: 'JP Voice', icon: Mic }, 
       { id: 'settings', label: 'Settings', icon: Settings } 
   ];

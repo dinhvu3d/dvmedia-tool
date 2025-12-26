@@ -322,7 +322,7 @@ class DVMakerApp(ctk.CTk):
         self.tab_view = ctk.CTkTabview(self, width=500, height=50)
         self.tab_view.grid(row=1, column=0, pady=10, sticky="nsew", padx=20)
         
-        self.tab_tts = self.tab_view.add("TTS (Đọc văn bản)")
+        self.tab_tts = self.tab_view.add("GSpeech")
         self.tab_train = self.tab_view.add("Model Train (Huấn luyện)")
 
         self.setup_tts_tab()
@@ -350,7 +350,7 @@ class DVMakerApp(ctk.CTk):
         frame_left = ctk.CTkFrame(self.tab_tts, fg_color="transparent")
         frame_left.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
 
-        ctk.CTkLabel(frame_left, text="0. Khởi động Server (api_v2.py):", font=("Arial", 14, "bold")).pack(anchor="w", pady=(0,5))
+        ctk.CTkLabel(frame_left, text="0. START SERVER (GPU):", font=("Arial", 14, "bold")).pack(anchor="w", pady=(0,5))
         
         bat_frame = ctk.CTkFrame(frame_left, fg_color="transparent")
         bat_frame.pack(fill="x", pady=(0, 5))
@@ -360,8 +360,7 @@ class DVMakerApp(ctk.CTk):
         self.entry_script.pack(side="left", fill="x", expand=True, padx=(0, 5))
         
         ctk.CTkButton(bat_frame, text="...", width=30, command=self.browse_script).pack(side="right")
-        
-        ctk.CTkButton(frame_left, text="KHỞI ĐỘNG SERVER", command=self.run_server_thread, fg_color="green").pack(fill="x", pady=(0, 15))
+        ctk.CTkButton(frame_left, text="START SERVER (GPU)", command=self.run_server_thread, fg_color="green").pack(fill="x", pady=(0, 15))
 
         ctk.CTkLabel(frame_left, text="1. Cấu hình GPT-SoVITS API:", font=("Arial", 14, "bold")).pack(anchor="w", pady=(0,5))
         self.entry_api = ctk.CTkEntry(frame_left, placeholder_text="Ví dụ: http://127.0.0.1:9880")
@@ -418,7 +417,7 @@ class DVMakerApp(ctk.CTk):
         self.textbox_log.pack(fill="both", expand=True, pady=(0, 10))
 
         # NÚT CHẠY
-        self.btn_run = ctk.CTkButton(frame_right, text="BẮT ĐẦU ĐỌC (TTS)", command=self.run_tts_thread, fg_color="#1f6aa5", height=50, font=("Arial", 16, "bold"))
+        self.btn_run = ctk.CTkButton(frame_right, text="START GSPEECH", command=self.run_tts_thread, fg_color="#1f6aa5", height=50, font=("Arial", 16, "bold"))
         self.btn_run.pack(fill="x")
 
     def setup_train_tab(self):
@@ -642,7 +641,7 @@ Sau khi xong, quay lại Tool này, vào Tab TTS và bấm "Làm mới" (nếu c
             self.log(f"❌ LỖI: {str(e)}")
             messagebox.showerror("Lỗi", str(e))
         finally:
-            self.btn_run.configure(state="normal", text="BẮT ĐẦU ĐỌC (TTS)")
+            self.btn_run.configure(state="normal", text="START GSPEECH")
 
     def run_train_thread(self):
         threading.Thread(target=self.process_train, daemon=True).start()
