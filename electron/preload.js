@@ -86,4 +86,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   startServer: (data) => ipcRenderer.invoke('tts:startServer', data),
   stopServer: () => ipcRenderer.invoke('tts:stopServer'),
+
+  // JP VOICE (VOICEVOX)
+  startJPVoiceEngine: (path) => ipcRenderer.invoke('jp-voice:start-engine', path),
+  stopJPVoiceEngine: () => ipcRenderer.invoke('jp-voice:stop-engine'),
+  getJPVoiceSpeakers: () => ipcRenderer.invoke('jp-voice:get-speakers'),
+  runJPVoiceTTS: (config) => ipcRenderer.invoke('jp-voice:run-tts', config),
+  stopJPVoiceTTS: () => ipcRenderer.invoke('jp-voice:stop-tts'),
+  onJPVoiceStatus: (cb) => {
+      const listener = (e, v) => cb(v);
+      ipcRenderer.on('jp-voice-status', listener);
+      return () => ipcRenderer.removeListener('jp-voice-status', listener);
+  },
+  onJPVoiceProgress: (cb) => {
+      const listener = (e, v) => cb(v);
+      ipcRenderer.on('jp-voice-progress', listener);
+      return () => ipcRenderer.removeListener('jp-voice-progress', listener);
+  }
 });

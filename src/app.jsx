@@ -930,6 +930,229 @@ const TTSTab = () => {
     );
 };
 
+// --- JP VOICE TAB (NEW) ---
+const JPVoiceTab = () => {
+    // 1. Config State
+    const [config, setConfig] = useState(() => {
+        try {
+            const saved = localStorage.getItem('jp_voice_config');
+            return saved ? JSON.parse(saved) : {
+                enginePath: '',
+                speakerId: '1', // Default to a common ID
+                styleId: '1', // This will be the actual ID sent to the API
+                inputPath: '',
+                outputFolder: '',
+                format: 'wav',
+                outputFilename: ''
+            };
+        } catch {
+            return { enginePath: '', speakerId: '1', styleId: '1', inputPath: '', outputFolder: '', format: 'wav', outputFilename: '' };
+        }
+    });
+
+    const [speakers, setSpeakers] = useState([]);
+    const [selectedCharacter, setSelectedCharacter] = useState(null);
+    const [styles, setStyles] = useState([]);
+
+    const [isEngineRunning, setIsEngineRunning] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [logs, setLogs] = useState([]);
+    const [progress, setProgress] = useState(0);
+
+    // 2. Save & Effects
+    useEffect(() => {
+        localStorage.setItem('jp_voice_config', JSON.stringify(config));
+    }, [config]);
+
+    useEffect(() => {
+        let cleanStatus, cleanProgress, cleanLog;
+        if (window.electronAPI) {
+            cleanLog = window.electronAPI.onSystemLog(msg => setLogs(p => [msg, ...p]));
+            cleanStatus = window.electronAPI.onJPVoiceStatus(({ isRunning }) => setIsEngineRunning(isRunning));
+            cleanProgress = window.electronAPI.onJPVoiceProgress(p => setProgress(p));
+        }
+        return () => {
+            if(cleanLog) cleanLog();
+            if (cleanStatus) cleanStatus();
+            if (cleanProgress) cleanProgress();
+        };
+    }, []);
+
+    // 3. Handlers
+    const handleStartEngine = async () => {
+        if (!config.enginePath) return alert("Please select the VOICEVOX run.exe path.");
+        setLogs(p => [">>> Starting VOICEVOX Engine...", ...p]);
+        await window.electronAPI.startJPVoiceEngine(config.enginePath);
+        // After starting, try to fetch speakers
+        setTimeout(fetchSpeakers, 5000);
+    };
+
+    const handleStopEngine = async () => {
+        setLogs(p => [">>> Stopping VOICEVOX Engine...", ...p]);
+        await window.electronAPI.stopJPVoiceEngine();
+    };
+
+    const fetchSpeakers = async () => {
+        setLogs(p => [">>> Fetching speakers from engine...", ...p]);
+        const res = await window.electronAPI.getJPVoiceSpeakers();
+        if (res.success) {
+            setSpeakers(res.data);
+            setLogs(p => [ `>>> Found ${res.data.length} characters.`, ...p]);
+            // Set a default character if none is selected
+            if (!selectedCharacter && res.data.length > 0) {
+                handleCharacterChange(res.data[0].name, res.data);
+            }
+        } else {
+            setLogs(p => [`[ERROR] Could not fetch speakers: ${res.message}`, ...p]);
+        }
+    };
+    
+    const handleCharacterChange = (characterName, speakerList = speakers) => {
+        const character = speakerList.find(s => s.name === characterName);
+        if (character) {
+            setSelectedCharacter(character);
+            setStyles(character.styles);
+            // Set default style and update the main config styleId
+            setConfig(c => ({ ...c, speakerId: character.name, styleId: character.styles[0].id }));
+        }
+    };
+
+    const handleStart = async () => {
+        if (!isEngineRunning) return alert("Please start the VOICEVOX Engine first!");
+        if (!config.inputPath || !config.outputFolder) return alert("Please select an input file and output folder.");
+
+        setIsProcessing(true);
+        setProgress(0);
+        setLogs(p => [">>> Starting JP Voice TTS...", ...p]);
+        
+        const ttsConfig = {
+            ...config,
+            // The API uses the style ID as the 'speaker' parameter
+            speakerId: config.styleId 
+        };
+
+        const res = await window.electronAPI.runJPVoiceTTS(ttsConfig);
+        if (res.success) alert(res.message || "Process completed!");
+        
+        setIsProcessing(false);
+    };
+
+    const handleStop = async () => {
+        if (window.electronAPI.stopJPVoiceTTS) {
+            await window.electronAPI.stopJPVoiceTTS();
+        }
+        setIsProcessing(false);
+    };
+
+    // 4. UI Render
+    return (
+        <div className="max-w-5xl mx-auto flex gap-6 h-full pb-4">
+            {/* LEFT COLUMN */}
+            <div className="w-1/2 flex flex-col gap-3 h-full overflow-y-auto custom-scrollbar pr-1">
+                <div className="bg-[#1e222b] p-4 rounded border border-gray-700 shadow-md">
+                    <h3 className="text-orange-500 font-bold text-sm mb-4 uppercase flex justify-between items-center">
+                        JP Voice Settings
+                        <span className={`text-[10px] px-2 py-0.5 rounded ${isEngineRunning ? 'bg-green-600/20 text-green-500' : 'bg-red-600/20 text-red-500'}`}>
+                            {isEngineRunning ? '● ENGINE RUNNING' : '● ENGINE OFFLINE'}
+                        </span>
+                    </h3>
+                    
+                    <PathInput label="VOICEVOX Engine (run.exe)" value={config.enginePath} onChange={v => setConfig({...config, enginePath: v})} isFile={true} filters={[{name: 'Executable', extensions:['exe']}]} />
+                    
+                    <div className="flex gap-2 mb-3">
+                        <button onClick={handleStartEngine} disabled={isEngineRunning} className="flex-1 py-2 rounded font-bold text-xs bg-green-700 hover:bg-green-600 disabled:bg-gray-600 disabled:opacity-50">START ENGINE</button>
+                        <button onClick={handleStopEngine} disabled={!isEngineRunning} className="flex-1 py-2 rounded font-bold text-xs bg-red-700 hover:bg-red-600 disabled:bg-gray-600 disabled:opacity-50">STOP ENGINE</button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Model/Character:</label>
+                            <div className="relative">
+                                <select value={config.speakerId} onChange={e => handleCharacterChange(e.target.value)} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none cursor-pointer appearance-none">
+                                    {speakers.length === 0 && <option>Click "Fetch" after starting engine</option>}
+                                    {speakers.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                                </select>
+                                <button onClick={fetchSpeakers} className="absolute right-1 top-1 bg-orange-600 hover:bg-orange-700 text-white px-2 py-1 rounded text-[9px] font-bold">Fetch</button>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Style:</label>
+                            <select value={config.styleId} onChange={e => setConfig({...config, styleId: e.target.value})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none cursor-pointer">
+                                {styles.map(st => <option key={st.id} value={st.id}>{st.name} (ID: {st.id})</option>)}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-[#1e222b] p-4 rounded border border-gray-700 shadow-md">
+                    <h3 className="text-blue-400 font-bold text-sm mb-4 uppercase flex items-center gap-2"><Folder size={16}/> File & Output</h3>
+                    <PathInput label="Nội dung (.txt hoặc .srt)" value={config.inputPath} onChange={v => setConfig({...config, inputPath: v})} isFile={true} filters={[{name: 'Text/Sub', extensions:['txt', 'srt']}]} />
+                    <PathInput label="Thư mục lưu kết quả" value={config.outputFolder} onChange={v => setConfig({...config, outputFolder: v})} />
+                    
+                    <div className="mt-3">
+                        <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Tên file xuất (Tùy chọn):</label>
+                        <div className="flex gap-2 items-center">
+                            <input type="text" value={config.outputFilename || ''} onChange={e => setConfig({...config, outputFilename: e.target.value})} className="flex-1 bg-[#15171e] border border-gray-600 text-white text-xs rounded px-3 py-2 outline-none focus:border-orange-500" placeholder="Mặc định: Tên_Input_tts" />
+                            <div className="bg-[#2a2e3b] border border-gray-600 text-gray-400 text-xs rounded px-3 py-2 font-bold">.{config.format}</div>
+                        </div>
+                    </div>
+
+                    <div className="mt-3">
+                        <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Định dạng xuất:</label>
+                        <select value={config.format} onChange={e => setConfig({...config, format: e.target.value})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none">
+                            <option value="wav">WAV (Chất lượng gốc)</option>
+                            <option value="mp3">MP3 (Nén nhẹ)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            {/* RIGHT COLUMN */}
+            <div className="w-1/2 flex flex-col gap-4 h-full">
+                <div className="bg-[#1e222b] p-5 rounded border border-gray-700 shadow-lg flex-1 flex flex-col overflow-hidden">
+                    <div className="flex items-center gap-2 mb-4 border-b border-gray-700 pb-2">
+                        <Mic className="text-orange-500" size={20} />
+                        <h3 className="font-bold text-gray-200 uppercase text-sm tracking-wider">Log hệ thống</h3>
+                    </div>
+
+                    {isProcessing && (
+                        <div className="mb-4">
+                            <div className="flex justify-between text-[10px] text-gray-400 mb-1 font-bold">
+                                <span className="uppercase text-blue-400">Đang xử lý TTS...</span>
+                                <span>{progress}%</span>
+                            </div>
+                            <div className="w-full bg-gray-700 h-2 rounded-full overflow-hidden border border-gray-600">
+                                <div className="bg-blue-500 h-full transition-all duration-300 shadow-[0_0_10px_rgba(59,130,246,0.6)]" style={{ width: `${progress}%` }}></div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="bg-[#15171e] flex-1 rounded border border-gray-700 p-2 font-mono text-[10px] text-gray-400 relative overflow-hidden">
+                        <div className="absolute inset-0 overflow-y-auto custom-scrollbar p-2">
+                            {logs.length === 0 ? <div className="h-full flex items-center justify-center text-gray-600 italic">Sẵn sàng...</div> : logs.map((l, i) => <div key={i} className="mb-1 border-b border-gray-800/50 pb-1">{l}</div>)}
+                        </div>
+                    </div>
+
+                    {isProcessing ? (
+                        <button onClick={handleStop} className="w-full mt-4 py-4 rounded font-bold text-sm uppercase tracking-widest shadow-xl flex items-center justify-center gap-3 transition-all bg-red-600 hover:bg-red-700 text-white">
+                            <Ban size={20} /> STOP
+                        </button>
+                    ) : (
+                        <button 
+                            onClick={handleStart} 
+                            disabled={!isEngineRunning}
+                            className={`w-full mt-4 py-4 rounded font-bold text-sm uppercase tracking-widest shadow-xl flex items-center justify-center gap-3 transition-all ${(!isEngineRunning) ? 'bg-gray-700 text-gray-500' : 'bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white'}`}
+                        >
+                            <Zap size={20} /> START
+                        </button>
+                    )}
+
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // --- SETTINGS TAB (UPDATED V1.0.0) ---
 const SettingsTab = () => {
     return (
@@ -1035,6 +1258,7 @@ export default function App() {
       { id: 'mix-video', label: 'Mix Video', icon: Video }, 
       { id: 'sync-video', label: 'Merge', icon: Zap },
       { id: 'tts', label: 'TTS', icon: Mic }, 
+      { id: 'jp-voice', label: 'JP Voice', icon: Mic }, 
       { id: 'settings', label: 'Settings', icon: Settings } 
   ];
 
@@ -1046,6 +1270,7 @@ export default function App() {
           case 'mix-video': return <MixVideoTab />; 
           case 'sync-video': return <SyncVideoTab />;
           case 'tts': return <TTSTab />; 
+          case 'jp-voice': return <JPVoiceTab />; 
           case 'settings': return <SettingsTab />; 
           default: return null; 
       } 

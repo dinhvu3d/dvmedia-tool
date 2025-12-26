@@ -602,6 +602,17 @@ ipcMain.handle('tts:checkConnection', async (e, url) => {
     });
 });
 
+ipcMain.handle('jp-voice:stop-tts', async () => {
+    if (ttsRunProcess) {
+        try {
+            ttsRunProcess.kill();
+        } finally {
+            ttsRunProcess = null;
+        }
+    }
+    return { success: true };
+});
+
 // ==========================================
 // 8. SYNC VIDEO RENDER ENGINE (OPTIMIZED GPU & LOGIC)
 // ==========================================
@@ -881,6 +892,7 @@ ipcMain.handle('backend:renderSync', async (e, { inputs, config, analysisData })
 // ==========================================
 let ttsServerProcess = null;
 let ttsRunProcess = null;
+let voicevoxProcess = null; // Add this for VOICEVOX
 
 // 1. Handler Khởi động Server GPT-SoVITS ngầm
 ipcMain.handle('tts:startServer', async (event, { pythonPath, apiScriptPath }) => {
@@ -920,7 +932,7 @@ ipcMain.handle('tts:stopServer', async () => {
     return { success: true };
 });
 
-// 2. Handler chính chạy TTS (Lệnh mà bạn đang bị báo lỗi)
+// 3. Handler chính chạy TTS (GPT-SoVITS)
 ipcMain.handle('backend:startTTS', async (event, config) => {
     const scriptPath = resolveResource('tts_engine.py');
     if (!fs.existsSync(scriptPath)) return { success: false, message: "Không thấy tts_engine.py" };
@@ -963,6 +975,123 @@ ipcMain.handle('backend:startTTS', async (event, config) => {
             if (!isResolved) {
                 isResolved = true;
                 resolve(code === 0 ? { success: true } : { success: false, message: `Thoát với mã ${code}` });
+            }
+        });
+    });
+});
+
+// --- JP VOICE (VOICEVOX) ---
+ipcMain.handle('jp-voice:start-engine', async (e, enginePath) => {
+    if (voicevoxProcess) return { success: true, message: "Engine is already running." };
+    if (!fs.existsSync(enginePath)) return { success: false, message: "Engine executable not found." };
+
+    return new Promise((resolve) => {
+        try {
+            sendLog('[JPVOICE] Starting VOICEVOX Engine...');
+            voicevoxProcess = spawn(enginePath, [], { windowsHide: true, creationflags: 0x08000000 });
+
+            voicevoxProcess.on('close', (code) => {
+                sendLog(`[JPVOICE] Engine exited with code ${code}.`);
+                voicevoxProcess = null;
+                if(mainWindow) mainWindow.webContents.send('jp-voice-status', { isRunning: false });
+            });
+            
+            voicevoxProcess.on('error', (err) => {
+                sendLog(`[JPVOICE-ERR] Failed to start engine: ${err.message}`);
+                voicevoxProcess = null;
+                if(mainWindow) mainWindow.webContents.send('jp-voice-status', { isRunning: false });
+            });
+            
+            // Assume it starts successfully after a short delay
+            setTimeout(() => {
+                sendLog('[JPVOICE] Engine process started. Please wait for it to initialize.');
+                if(mainWindow) mainWindow.webContents.send('jp-voice-status', { isRunning: true });
+                resolve({ success: true });
+            }, 3000);
+
+        } catch (err) {
+            resolve({ success: false, message: err.message });
+        }
+    });
+});
+
+ipcMain.handle('jp-voice:stop-engine', async () => {
+    if (voicevoxProcess) {
+        try {
+            // Dùng taskkill trên Windows để đảm bảo kill sạch cả process con (Tree)
+            if (process.platform === 'win32') {
+                exec(`taskkill /pid ${voicevoxProcess.pid} /f /t`);
+            } else {
+                voicevoxProcess.kill();
+            }
+            voicevoxProcess = null;
+            sendLog('[JPVOICE] Engine stopped.');
+            if(mainWindow) mainWindow.webContents.send('jp-voice-status', { isRunning: false });
+            return { success: true };
+        } catch (e) {
+            return { success: false, message: e.message };
+        }
+    }
+    return { success: true, message: "Engine was not running." };
+});
+
+ipcMain.handle('jp-voice:get-speakers', async () => {
+    return new Promise((resolve) => {
+        const req = http.get('http://127.0.0.1:50021/speakers', (res) => {
+            let data = '';
+            res.on('data', (chunk) => { data += chunk; });
+            res.on('end', () => {
+                try {
+                    resolve({ success: true, data: JSON.parse(data) });
+                } catch (e) {
+                    resolve({ success: false, message: 'Failed to parse speaker data.' });
+                }
+            });
+        });
+        req.on('error', (e) => resolve({ success: false, message: `Failed to connect to VOICEVOX Engine: ${e.message}` }));
+        req.setTimeout(2000, () => {
+            req.destroy();
+            resolve({ success: false, message: 'Connection to VOICEVOX Engine timed out.' });
+        });
+    });
+});
+
+ipcMain.handle('jp-voice:run-tts', async (event, config) => {
+    const scriptPath = resolveResource('tts_engine.py');
+    if (!fs.existsSync(scriptPath)) return { success: false, message: "Không thấy tts_engine.py" };
+    if (ttsRunProcess) return { success: false, message: "Một tác vụ TTS khác đang chạy." };
+    return new Promise((resolve) => {
+        let isResolved = false;
+        
+        const pythonEnv = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+        
+        // Add a 'task' parameter to distinguish from the other TTS task
+        const pyConfig = {...config, task: 'jp-voice'};
+        ttsRunProcess = spawn('python', ['-u', scriptPath, JSON.stringify(pyConfig)], { env: pythonEnv });
+
+        ttsRunProcess.stdout.on('data', (data) => {
+            const lines = data.toString().split('\n');
+            lines.forEach(line => {
+                const trimmed = line.trim();
+                if (!trimmed) return;
+                try {
+                    const msg = JSON.parse(trimmed);
+                    if (msg.type === 'log') sendLog(msg.message);
+                    if (msg.type === 'progress') {
+                        if(mainWindow) mainWindow.webContents.send('jp-voice-progress', msg.percent);
+                    }
+                    if (msg.type === 'done') { isResolved = true; resolve({ success: true, message: msg.message }); }
+                } catch (e) { sendLog(trimmed); }
+            });
+        });
+
+        ttsRunProcess.stderr.on('data', (data) => sendLog(`[JP-ERR] ${data.toString()}`));
+
+        ttsRunProcess.on('close', (code) => {
+            ttsRunProcess = null;
+            if (!isResolved) {
+                isResolved = true;
+                resolve(code === 0 ? { success: true, message: 'Process finished.' } : { success: false, message: `Engine exited with code ${code}` });
             }
         });
     });

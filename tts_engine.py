@@ -28,6 +28,7 @@ ensure_library("requests")
 ensure_library("pysrt")
 ensure_library("pydub")
 ensure_library("customtkinter")
+import re
 
 import requests
 import pysrt
@@ -70,6 +71,128 @@ class ConfigManager:
                 json.dump(config_data, f, indent=4, ensure_ascii=False)
         except Exception as e:
             print(f"Lỗi lưu config: {e}")
+
+# --- LOGIC XỬ LÝ (VOICEVOX) ---
+class VoicevoxLogic:
+    def __init__(self, api_url="http://127.0.0.1:50021"):
+        self.api_url = api_url
+
+    def check_connection(self):
+        """Kiểm tra xem VOICEVOX Engine có đang bật không"""
+        try:
+            response = requests.get(f"{self.api_url}/version", timeout=2)
+            return response.status_code == 200
+        except:
+            return False
+
+    def tts_request(self, text, speaker_id):
+        """Gửi lệnh đọc tới VOICEVOX Engine."""
+        try:
+            # 1. Tạo audio query
+            query_payload = {"text": text, "speaker": speaker_id}
+            query_response = requests.post(f"{self.api_url}/audio_query", params=query_payload, timeout=10)
+            if query_response.status_code != 200:
+                raise Exception(f"Lỗi audio_query (Code {query_response.status_code}): {query_response.text}")
+            
+            audio_query = query_response.json()
+
+            # 2. Tổng hợp âm thanh (Retry mechanism)
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    synth_response = requests.post(f"{self.api_url}/synthesis", params={"speaker": speaker_id}, json=audio_query, timeout=60)
+                    if synth_response.status_code != 200:
+                        raise Exception(f"Lỗi synthesis (Code {synth_response.status_code}): {synth_response.text}")
+                    return synth_response.content
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    else:
+                        raise e
+                except Exception as e:
+                    raise e
+        except Exception as e:
+            raise e
+
+    def process_srt(self, srt_path, output_path, speaker_id, format="wav", progress_callback=None):
+        subs = pysrt.open(srt_path)
+        combined_audio = AudioSegment.silent(duration=0)
+        
+        if len(subs) > 0:
+            last_end_time = subs[-1].end.ordinal
+            combined_audio = AudioSegment.silent(duration=last_end_time + 2000)
+
+        for i, sub in enumerate(subs):
+            text = sub.text.replace("\n", " ").strip()
+            if not text:
+                continue
+                
+            if progress_callback:
+                progress_callback(f"Đang xử lý dòng {i+1}/{len(subs)}: {text[:30]}...", percent=round(((i+1)/len(subs))*100))
+
+            try:
+                audio_data = self.tts_request(text, speaker_id)
+                
+                temp_file = f"temp_voicevox_{i}.wav"
+                with open(temp_file, "wb") as f:
+                    f.write(audio_data)
+                
+                segment = AudioSegment.from_wav(temp_file)
+                os.remove(temp_file)
+                
+                start_time = sub.start.ordinal
+                combined_audio = combined_audio.overlay(segment, position=start_time)
+                
+            except Exception as e:
+                error_msg = f"Lỗi dòng {i+1}: {e}"
+                if progress_callback:
+                    progress_callback(error_msg)
+                else:
+                    print(error_msg)
+        
+        if format == "mp3":
+            combined_audio.export(output_path, format="mp3", bitrate="192k")
+        else:
+            combined_audio.export(output_path, format="wav")
+
+    def process_txt(self, txt_path, output_path, speaker_id, format="wav", progress_callback=None):
+        with open(txt_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+
+        # Tách câu dựa trên dấu câu tiếng Nhật: 。 (dấu chấm), ！ (cảm thán), ？ (hỏi), và ký tự xuống dòng \n
+        # (?<=...) là lookbehind assertion để giữ lại dấu câu
+        sentences = [s.strip() for s in re.split(r'(?<=[。！？\n])', text) if s.strip()]
+        
+        combined_audio = AudioSegment.empty()
+        total = len(sentences)
+
+        for i, sentence in enumerate(sentences):
+            if progress_callback:
+                progress_callback(f"Đang xử lý câu {i+1}/{total}: {sentence[:30]}...", percent=round(((i+1)/total)*100))
+
+            try:
+                audio_data = self.tts_request(sentence, speaker_id)
+                
+                # Rate limiting to prevent timeout/overload
+                time.sleep(0.2)
+
+                temp_file = f"temp_voicevox_txt_{i}.wav"
+                with open(temp_file, "wb") as f:
+                    f.write(audio_data)
+                
+                segment = AudioSegment.from_wav(temp_file)
+                os.remove(temp_file)
+                
+                combined_audio += segment
+                
+            except Exception as e:
+                print(f"Lỗi câu {i+1}: {e}")
+        
+        if format == "mp3":
+            combined_audio.export(output_path, format="mp3", bitrate="192k")
+        else:
+            combined_audio.export(output_path, format="wav")
 
 # --- LOGIC XỬ LÝ (KẾT NỐI GPT-SOVITS) ---
 class DVMakerLogic:
@@ -563,9 +686,15 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         try:
             params = json.loads(sys.argv[1])
-            logic = DVMakerLogic(params['apiUrl'])
-            
-            # Sử dụng Path để xử lý đường dẫn Windows chuẩn xác
+            task = params.get('task', 'gpt-sovits') # Default to old task
+
+            def electron_log(msg, percent=None):
+                log_data = {"type": "log", "message": msg}
+                print(json.dumps(log_data, ensure_ascii=False), flush=True)
+                if percent is not None:
+                    progress_data = {"type": "progress", "percent": percent}
+                    print(json.dumps(progress_data), flush=True)
+
             input_path = Path(params['inputPath'])
             output_folder = Path(params['outputFolder'])
             out_format = params['format']
@@ -575,60 +704,73 @@ if __name__ == "__main__":
 
             custom_name = params.get('outputFilename', '').strip()
             if custom_name:
-                if custom_name.lower().endswith(f".{out_format}"):
-                    output_file = output_folder / custom_name
-                else:
-                    output_file = output_folder / f"{custom_name}.{out_format}"
+                # Ensure the extension is correct
+                if not custom_name.lower().endswith(f".{out_format}"):
+                    custom_name = f"{custom_name}.{out_format}"
+                output_file = output_folder / custom_name
             else:
                 output_file = output_folder / f"{input_path.stem}_tts.{out_format}"
 
-            def electron_log(msg, percent=None):
-                # Gửi log chữ
-                print(json.dumps({"type": "log", "message": msg}, ensure_ascii=False), flush=True)
-                # Nếu có phần trăm, gửi riêng một gói tin progress
-                if percent is not None:
-                    print(json.dumps({"type": "progress", "percent": percent}), flush=True)
-
-            electron_log(f"Bắt đầu xử lý: {input_path.name}")
-
-            if input_path.suffix.lower() == ".srt":
-                subs = pysrt.open(str(input_path))
-                total = len(subs)
-
-                # Tạo một hàm wrapper để tính %
-                def progress_wrapper(msg):
-                    try:
-                        current = int(msg.split('/')[0].split(' ')[-1])
-                        p = round((current / total) * 100)
-                        electron_log(msg, percent=p)
-                    except:
-                        electron_log(msg)
-
-                logic.process_srt(
-                    str(input_path), str(output_file), 
-                    params['refAudio'], params['refText'], 
-                    params['refLang'], params['targetLang'], 
-                    format=out_format, progress_callback=progress_wrapper
-                )
-            else:
-                electron_log("Đang đọc file văn bản và gửi yêu cầu API...")
-                with open(input_path, "r", encoding="utf-8") as f:
-                    text = f.read()
+            # --- JP VOICE (VOICEVOX) TASK ---
+            if task == 'jp-voice':
+                logic = VoicevoxLogic()
+                speaker_id = params['speakerId'] # Frontend will send speakerId
                 
-                audio_data = logic.tts_request(
-                    text, params['refAudio'], params['refText'], 
-                    params['refLang'], params['targetLang']
-                )
-                
-                with open(output_file, "wb") as f:
-                    f.write(audio_data)
-                
-                if out_format == "mp3":
-                    electron_log("Đang chuyển đổi sang MP3...")
-                    sound = AudioSegment.from_wav(str(output_file))
-                    sound.export(str(output_file), format="mp3")
+                electron_log(f"Bắt đầu xử lý JP VOICE: {input_path.name}")
 
-            # Gửi tin nhắn DONE kèm đường dẫn thật để kiểm chứng
+                if input_path.suffix.lower() == ".srt":
+                    logic.process_srt(
+                        str(input_path), str(output_file), speaker_id,
+                        format=out_format, progress_callback=electron_log
+                    )
+                else: # TXT file
+                    logic.process_txt(
+                        str(input_path), str(output_file), speaker_id,
+                        format=out_format, progress_callback=electron_log
+                    )
+
+            # --- GPT-SOVITS TASK ---
+            else: # Default task
+                logic = DVMakerLogic(params['apiUrl'])
+                electron_log(f"Bắt đầu xử lý GPT-SoVITS: {input_path.name}")
+
+                if input_path.suffix.lower() == ".srt":
+                    subs = pysrt.open(str(input_path))
+                    total = len(subs)
+
+                    def progress_wrapper(msg):
+                        try:
+                            current = int(msg.split('/')[0].split(' ')[-1])
+                            p = round((current / total) * 100)
+                            electron_log(msg, percent=p)
+                        except:
+                            electron_log(msg)
+
+                    logic.process_srt(
+                        str(input_path), str(output_file), 
+                        params['refAudio'], params['refText'], 
+                        params['refLang'], params['targetLang'], 
+                        format=out_format, progress_callback=progress_wrapper
+                    )
+                else:
+                    electron_log("Đang đọc file văn bản và gửi yêu cầu API...")
+                    with open(input_path, "r", encoding="utf-8") as f:
+                        text = f.read()
+                    
+                    audio_data = logic.tts_request(
+                        text, params['refAudio'], params['refText'], 
+                        params['refLang'], params['targetLang']
+                    )
+                    
+                    with open(output_file, "wb") as f:
+                        f.write(audio_data)
+                    
+                    if out_format == "mp3":
+                        electron_log("Đang chuyển đổi sang MP3...")
+                        sound = AudioSegment.from_wav(str(output_file))
+                        sound.export(str(output_file), format="mp3")
+
+            # Gửi tin nhắn DONE
             print(json.dumps({"type": "done", "message": f"Thành công! File: {output_file.absolute()}"}), flush=True)
             
         except Exception as e:
