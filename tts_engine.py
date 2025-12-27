@@ -316,6 +316,61 @@ class DVMakerLogic:
         else:
             combined_audio.export(output_path, format="wav")
 
+    def process_txt(self, txt_path, output_path, ref_audio, ref_text, ref_lang, target_lang, speed=1.0, format="wav", progress_callback=None, pause_config=None):
+        with open(txt_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+
+        # Tách câu dựa trên dấu câu phổ biến (Việt/Anh/Trung/Nhật)
+        # Giữ lại dấu câu để kiểm tra logic pause
+        sentences = [s.strip() for s in re.split(r'(?<=[.?!,;。！？\n])', text) if s.strip()]
+        
+        combined_audio = AudioSegment.empty()
+        total = len(sentences)
+
+        for i, sentence in enumerate(sentences):
+            if progress_callback:
+                progress_callback(f"Đang xử lý câu {i+1}/{total}: {sentence[:30]}...", percent=round(((i+1)/total)*100))
+
+            try:
+                # Logic chèn silence dựa trên câu trước đó
+                if i > 0 and pause_config:
+                    prev_sentence = sentences[i-1]
+                    if prev_sentence:
+                        last_char = prev_sentence.strip()[-1]
+                        pause_ms = 0
+                        
+                        if last_char in [',', ';', '、']:
+                            pause_ms = float(pause_config.get('comma', 0)) * 1000
+                        elif last_char in ['.', '。']:
+                            pause_ms = float(pause_config.get('period', 0)) * 1000
+                        elif last_char in ['!', '?', '！', '？']:
+                            pause_ms = float(pause_config.get('exclamation', 0)) * 1000
+                        
+                        if pause_ms > 0:
+                            combined_audio += AudioSegment.silent(duration=pause_ms)
+
+                audio_data = self.tts_request(sentence, ref_audio, ref_text, ref_lang, target_lang, speed=speed)
+                
+                # Dùng file tạm để load vào pydub (tránh lỗi định dạng raw bytes)
+                temp_file = f"temp_gpt_{i}.wav"
+                with open(temp_file, "wb") as f:
+                    f.write(audio_data)
+                
+                segment = AudioSegment.from_wav(temp_file)
+                os.remove(temp_file)
+                
+                combined_audio += segment
+                
+            except Exception as e:
+                if progress_callback:
+                    progress_callback(f"Lỗi câu {i+1}: {e}")
+                print(f"Error sentence {i}: {e}")
+        
+        if format == "mp3":
+            combined_audio.export(output_path, format="mp3", bitrate="192k")
+        else:
+            combined_audio.export(output_path, format="wav")
+
 # --- LOGIC XỬ LÝ (FISH SPEECH) ---
 class FishSpeechLogic:
     def __init__(self, api_url="http://127.0.0.1:8080"):
@@ -867,6 +922,13 @@ if __name__ == "__main__":
                 logic = DVMakerLogic(params['apiUrl'])
                 speed = params.get('speed', 1.0)
                 pitch = params.get('pitch', 0.0)
+                
+                # Lấy cấu hình pause
+                pause_config = {
+                    'comma': params.get('pauseComma', 0),
+                    'period': params.get('pausePeriod', 0),
+                    'exclamation': params.get('pauseExclamation', 0)
+                }
 
                 electron_log(f"Bắt đầu xử lý GPT-SoVITS: {input_path.name} (Speed: {speed}, Pitch: {pitch})")
 
@@ -889,22 +951,14 @@ if __name__ == "__main__":
                         format=out_format, progress_callback=progress_wrapper
                     )
                 else:
-                    electron_log("Đang đọc file văn bản và gửi yêu cầu API...")
-                    with open(input_path, "r", encoding="utf-8") as f:
-                        text = f.read()
-                    
-                    audio_data = logic.tts_request(
-                        text, params['refAudio'], params['refText'], 
-                        params['refLang'], params['targetLang'], speed=speed
+                    # Sử dụng hàm process_txt mới thay vì đọc nguyên file
+                    logic.process_txt(
+                        str(input_path), str(output_file), 
+                        params['refAudio'], params['refText'], 
+                        params['refLang'], params['targetLang'], speed=speed,
+                        format=out_format, progress_callback=electron_log,
+                        pause_config=pause_config
                     )
-                    
-                    with open(output_file, "wb") as f:
-                        f.write(audio_data)
-                    
-                    if out_format == "mp3":
-                        electron_log("Đang chuyển đổi sang MP3...")
-                        sound = AudioSegment.from_wav(str(output_file))
-                        sound.export(str(output_file), format="mp3")
             
             # Áp dụng Pitch Shift (nếu có) cho GSpeech và JPVoice
             if task in ['gpt-sovits', 'jp-voice'] and params.get('pitch', 0.0) != 0.0:

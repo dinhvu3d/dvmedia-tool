@@ -728,13 +728,19 @@ const TTSTab = () => {
                 refAudio: '', refText: '', refLang: 'vi', targetLang: 'vi',
                 inputPath: '', outputFolder: '', format: 'wav', outputFilename: '',
                 speed: 1.0,
-                pitch: 0.0
+                pitch: 0.0,
+                pauseComma: 0,
+                pausePeriod: 0,
+                pauseExclamation: 0
             };
             return saved ? { ...defaultConfig, ...JSON.parse(saved) } : defaultConfig;
         } catch { 
             return { 
                 apiUrl: 'http://127.0.0.1:9880', refAudio: '', refText: '', refLang: 'vi', targetLang: 'vi', 
-                inputPath: '', outputFolder: '', format: 'wav', outputFilename: '', speed: 1.0, pitch: 0.0 
+                inputPath: '', outputFolder: '', format: 'wav', outputFilename: '', speed: 1.0, pitch: 0.0,
+                pauseComma: 0,
+                pausePeriod: 0,
+                pauseExclamation: 0
             }; 
         }
     });
@@ -879,6 +885,37 @@ const TTSTab = () => {
                             />
                         </div>
                     </div>
+
+                    {/* Pause Duration Inputs */}
+                    <div className="mt-2 grid grid-cols-3 gap-3">
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold uppercase font-mono mb-1">Pause (,)</label>
+                            <input
+                                type="number" min="0" max="5" step="0.1"
+                                value={config.pauseComma}
+                                onChange={e => setConfig({ ...config, pauseComma: parseFloat(e.target.value) || 0 })}
+                                className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none focus:border-orange-500 font-bold text-center"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold uppercase font-mono mb-1">Pause (.)</label>
+                            <input
+                                type="number" min="0" max="5" step="0.1"
+                                value={config.pausePeriod}
+                                onChange={e => setConfig({ ...config, pausePeriod: parseFloat(e.target.value) || 0 })}
+                                className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none focus:border-orange-500 font-bold text-center"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold uppercase font-mono mb-1">Pause (!/?)</label>
+                            <input
+                                type="number" min="0" max="5" step="0.1"
+                                value={config.pauseExclamation}
+                                onChange={e => setConfig({ ...config, pauseExclamation: parseFloat(e.target.value) || 0 })}
+                                className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none focus:border-orange-500 font-bold text-center"
+                            />
+                        </div>
+                    </div>
                 </div>
 
                 <div className="bg-[#1e222b] p-4 rounded border border-gray-700 shadow-md">
@@ -980,7 +1017,10 @@ const JPVoiceTab = () => {
                 format: 'wav',
                 outputFilename: '',
                 speed: 1.0,
-                pitch: 0.0
+                pitch: 0.0,
+                pauseComma: 0,
+                pausePeriod: 0,
+                pauseExclamation: 0
             };
             return saved ? { ...defaultConfig, ...JSON.parse(saved) } : defaultConfig;
         } catch {
@@ -989,7 +1029,10 @@ const JPVoiceTab = () => {
                 inputPath: '', outputFolder: '', format: 'wav',
                 outputFilename: '',
                 speed: 1.0,
-                pitch: 0.0
+                pitch: 0.0,
+                pauseComma: 0,
+                pausePeriod: 0,
+                pauseExclamation: 0
             };
         }
     });
@@ -1144,6 +1187,37 @@ const JPVoiceTab = () => {
                                 type="number" min="-0.15" max="0.15" step="0.01"
                                 value={config.pitch}
                                 onChange={e => setConfig({ ...config, pitch: e.target.value === '' ? '' : parseFloat(e.target.value) })}
+                                className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none focus:border-orange-500 font-bold text-center"
+                            />
+                        </div>
+                    </div>
+
+                    {/* Pause Duration Inputs */}
+                    <div className="mt-2 grid grid-cols-3 gap-3">
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold uppercase font-mono mb-1">Pause (,)</label>
+                            <input
+                                type="number" min="0" max="5" step="0.1"
+                                value={config.pauseComma}
+                                onChange={e => setConfig({ ...config, pauseComma: parseFloat(e.target.value) || 0 })}
+                                className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none focus:border-orange-500 font-bold text-center"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold uppercase font-mono mb-1">Pause (.)</label>
+                            <input
+                                type="number" min="0" max="5" step="0.1"
+                                value={config.pausePeriod}
+                                onChange={e => setConfig({ ...config, pausePeriod: parseFloat(e.target.value) || 0 })}
+                                className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none focus:border-orange-500 font-bold text-center"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold uppercase font-mono mb-1">Pause (!/?)</label>
+                            <input
+                                type="number" min="0" max="5" step="0.1"
+                                value={config.pauseExclamation}
+                                onChange={e => setConfig({ ...config, pauseExclamation: parseFloat(e.target.value) || 0 })}
                                 className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none focus:border-orange-500 font-bold text-center"
                             />
                         </div>
