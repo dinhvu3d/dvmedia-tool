@@ -723,12 +723,20 @@ const TTSTab = () => {
     const [config, setConfig] = useState(() => {
         try {
             const saved = localStorage.getItem('tts_config');
-            return saved ? JSON.parse(saved) : {
+            const defaultConfig = {
                 apiUrl: 'http://127.0.0.1:9880',
                 refAudio: '', refText: '', refLang: 'vi', targetLang: 'vi',
-                inputPath: '', outputFolder: '', format: 'wav', outputFilename: ''
+                inputPath: '', outputFolder: '', format: 'wav', outputFilename: '',
+                speed: 1.0,
+                pitch: 0.0
             };
-        } catch { return { apiUrl: 'http://127.0.0.1:9880', refAudio: '', refText: '', refLang: 'vi', targetLang: 'vi', inputPath: '', outputFolder: '', format: 'wav', outputFilename: '' }; }
+            return saved ? { ...defaultConfig, ...JSON.parse(saved) } : defaultConfig;
+        } catch { 
+            return { 
+                apiUrl: 'http://127.0.0.1:9880', refAudio: '', refText: '', refLang: 'vi', targetLang: 'vi', 
+                inputPath: '', outputFolder: '', format: 'wav', outputFilename: '', speed: 1.0, pitch: 0.0 
+            }; 
+        }
     });
 
     // 2. Khởi tạo State cấu hình Server
@@ -847,6 +855,28 @@ const TTSTab = () => {
                                 <option value="zh">Tiếng Trung</option>
                                 <option value="ja">Tiếng Nhật</option>
                             </select>
+                        </div>
+                    </div>
+
+                    {/* Speed and Pitch controls */}
+                    <div className="grid grid-cols-2 gap-3 mt-3">
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Speed:</label>
+                            <input 
+                                type="number" min="0.5" max="2.0" step="0.05"
+                                value={config.speed}
+                                onChange={e => setConfig({...config, speed: parseFloat(e.target.value)})}
+                                className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none focus:border-orange-500 font-bold text-center"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold mb-1 uppercase font-mono">Pitch:</label>
+                            <input 
+                                type="number" min="-0.5" max="0.5" step="0.01"
+                                value={config.pitch}
+                                onChange={e => setConfig({...config, pitch: parseFloat(e.target.value)})}
+                                className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none focus:border-orange-500 font-bold text-center"
+                            />
                         </div>
                     </div>
                 </div>

@@ -72,6 +72,30 @@ class ConfigManager:
         except Exception as e:
             print(f"Lỗi lưu config: {e}")
 
+# --- HELPERS ---
+def apply_pitch_shift(file_path, pitch_octaves, electron_log_func):
+    """
+    Applies a pitch shift to an audio file using pydub.
+    Note: This method will also affect the duration of the audio.
+    A pitch_octaves value of 0.5 means shifting up by 6 semitones.
+    A pitch_octaves value of -0.5 means shifting down by 6 semitones.
+    """
+    if not pitch_octaves or pitch_octaves == 0.0:
+        return
+    try:
+        electron_log_func(f"Applying pitch shift of {pitch_octaves} octaves...")
+        sound = AudioSegment.from_file(file_path)
+        
+        new_sample_rate = int(sound.frame_rate * (2.0 ** pitch_octaves))
+        
+        pitched_sound = sound._spawn(sound.raw_data, overrides={'frame_rate': new_sample_rate})
+        
+        output_format = file_path.split('.')[-1]
+        pitched_sound.export(file_path, format=output_format)
+        electron_log_func("Pitch shift applied.")
+    except Exception as e:
+        electron_log_func(f"WARN: Could not apply pitch shift: {e}")
+
 # --- LOGIC XỬ LÝ (VOICEVOX) ---
 class VoicevoxLogic:
     def __init__(self, api_url="http://127.0.0.1:50021"):
@@ -85,7 +109,7 @@ class VoicevoxLogic:
         except:
             return False
 
-    def tts_request(self, text, speaker_id, speed=1.0, pitch=0.0):
+    def tts_request(self, text, speaker_id):
         """Gửi lệnh đọc tới VOICEVOX Engine."""
         try:
             # 1. Tạo audio query
@@ -95,10 +119,6 @@ class VoicevoxLogic:
                 raise Exception(f"Lỗi audio_query (Code {query_response.status_code}): {query_response.text}")
             
             audio_query = query_response.json()
-
-            # Thêm Speed và Pitch vào audio_query
-            audio_query['speedScale'] = speed
-            audio_query['pitchScale'] = pitch
 
             # 2. Tổng hợp âm thanh (Retry mechanism)
             max_retries = 3
@@ -119,7 +139,7 @@ class VoicevoxLogic:
         except Exception as e:
             raise e
 
-    def process_srt(self, srt_path, output_path, speaker_id, speed=1.0, pitch=0.0, format="wav", progress_callback=None):
+    def process_srt(self, srt_path, output_path, speaker_id, format="wav", progress_callback=None):
         subs = pysrt.open(srt_path)
         combined_audio = AudioSegment.silent(duration=0)
         
@@ -136,7 +156,7 @@ class VoicevoxLogic:
                 progress_callback(f"Đang xử lý dòng {i+1}/{len(subs)}: {text[:30]}...", percent=round(((i+1)/len(subs))*100))
 
             try:
-                audio_data = self.tts_request(text, speaker_id, speed, pitch)
+                audio_data = self.tts_request(text, speaker_id)
                 
                 temp_file = f"temp_voicevox_{i}.wav"
                 with open(temp_file, "wb") as f:
@@ -160,7 +180,7 @@ class VoicevoxLogic:
         else:
             combined_audio.export(output_path, format="wav")
 
-    def process_txt(self, txt_path, output_path, speaker_id, speed=1.0, pitch=0.0, format="wav", progress_callback=None):
+    def process_txt(self, txt_path, output_path, speaker_id, format="wav", progress_callback=None):
         with open(txt_path, 'r', encoding='utf-8') as f:
             text = f.read()
 
@@ -176,7 +196,7 @@ class VoicevoxLogic:
                 progress_callback(f"Đang xử lý câu {i+1}/{total}: {sentence[:30]}...", percent=round(((i+1)/total)*100))
 
             try:
-                audio_data = self.tts_request(sentence, speaker_id, speed, pitch)
+                audio_data = self.tts_request(sentence, speaker_id)
                 
                 # Rate limiting to prevent timeout/overload
                 time.sleep(0.2)
@@ -212,7 +232,7 @@ class DVMakerLogic:
         except:
             return False
 
-    def tts_request(self, text, ref_audio, ref_text, ref_lang, target_lang):
+    def tts_request(self, text, ref_audio, ref_text, ref_lang, target_lang, speed=1.0):
         """
         Gửi lệnh đọc tới GPT-SoVITS.
         Gửi kèm nhiều tên biến khác nhau để tương thích cả v1 và v2.
@@ -229,7 +249,8 @@ class DVMakerLogic:
             "prompt_lang": ref_lang,        # Ngôn ngữ file mẫu (v2)
             "prompt_language": ref_lang,    # Ngôn ngữ file mẫu (v1)
             
-            "media_type": "wav"             # Định dạng trả về
+            "media_type": "wav",            # Định dạng trả về
+            "speed": speed                  # Tham số tốc độ
         }
         
         # Endpoint thường là /tts hoặc / (tùy phiên bản)
@@ -251,7 +272,7 @@ class DVMakerLogic:
         except Exception as e:
             raise e
 
-    def process_srt(self, srt_path, output_path, ref_audio, ref_text, ref_lang, target_lang, format="wav", progress_callback=None):
+    def process_srt(self, srt_path, output_path, ref_audio, ref_text, ref_lang, target_lang, speed=1.0, format="wav", progress_callback=None):
         subs = pysrt.open(srt_path)
         combined_audio = AudioSegment.silent(duration=0)
         
@@ -270,7 +291,7 @@ class DVMakerLogic:
 
             try:
                 # Gọi API lấy giọng đọc
-                audio_data = self.tts_request(text, ref_audio, ref_text, ref_lang, target_lang)
+                audio_data = self.tts_request(text, ref_audio, ref_text, ref_lang, target_lang, speed=speed)
                 
                 # Lưu tạm
                 temp_file = f"temp_{i}.wav"
@@ -800,21 +821,17 @@ if __name__ == "__main__":
             if task == 'jp-voice':
                 logic = VoicevoxLogic()
                 speaker_id = params['speakerId'] # Frontend will send speakerId
-                speed = params.get('speed', 1.0)
-                pitch = params.get('pitch', 0.0)
                 
-                electron_log(f"Bắt đầu xử lý JP VOICE: {input_path.name} (Speed: {speed}, Pitch: {pitch})")
+                electron_log(f"Bắt đầu xử lý JP VOICE: {input_path.name}")
 
                 if input_path.suffix.lower() == ".srt":
                     logic.process_srt(
                         str(input_path), str(output_file), speaker_id,
-                        speed=speed, pitch=pitch,
                         format=out_format, progress_callback=electron_log
                     )
                 else: # TXT file
                     logic.process_txt(
                         str(input_path), str(output_file), speaker_id,
-                        speed=speed, pitch=pitch,
                         format=out_format, progress_callback=electron_log
                     )
 
@@ -848,7 +865,10 @@ if __name__ == "__main__":
             # --- GPT-SOVITS TASK ---
             else: # Default task
                 logic = DVMakerLogic(params['apiUrl'])
-                electron_log(f"Bắt đầu xử lý GPT-SoVITS: {input_path.name}")
+                speed = params.get('speed', 1.0)
+                pitch = params.get('pitch', 0.0)
+
+                electron_log(f"Bắt đầu xử lý GPT-SoVITS: {input_path.name} (Speed: {speed}, Pitch: {pitch})")
 
                 if input_path.suffix.lower() == ".srt":
                     subs = pysrt.open(str(input_path))
@@ -865,7 +885,7 @@ if __name__ == "__main__":
                     logic.process_srt(
                         str(input_path), str(output_file), 
                         params['refAudio'], params['refText'], 
-                        params['refLang'], params['targetLang'], 
+                        params['refLang'], params['targetLang'], speed=speed,
                         format=out_format, progress_callback=progress_wrapper
                     )
                 else:
@@ -875,7 +895,7 @@ if __name__ == "__main__":
                     
                     audio_data = logic.tts_request(
                         text, params['refAudio'], params['refText'], 
-                        params['refLang'], params['targetLang']
+                        params['refLang'], params['targetLang'], speed=speed
                     )
                     
                     with open(output_file, "wb") as f:
@@ -885,6 +905,10 @@ if __name__ == "__main__":
                         electron_log("Đang chuyển đổi sang MP3...")
                         sound = AudioSegment.from_wav(str(output_file))
                         sound.export(str(output_file), format="mp3")
+            
+            # Áp dụng Pitch Shift (nếu có) cho GSpeech và JPVoice
+            if task in ['gpt-sovits', 'jp-voice'] and params.get('pitch', 0.0) != 0.0:
+                apply_pitch_shift(str(output_file), params.get('pitch', 0.0), electron_log)
 
             # Gửi tin nhắn DONE
             print(json.dumps({"type": "done", "message": f"Thành công! File: {output_file.absolute()}"}), flush=True)
