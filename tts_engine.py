@@ -100,44 +100,70 @@ def apply_pitch_shift(file_path, pitch_octaves, electron_log_func):
 class VoicevoxLogic:
     def __init__(self, api_url="http://127.0.0.1:50021"):
         self.api_url = api_url
+        self.session = requests.Session() # Tối ưu: Tái sử dụng connection
 
     def check_connection(self):
         """Kiểm tra xem VOICEVOX Engine có đang bật không"""
         try:
-            response = requests.get(f"{self.api_url}/version", timeout=2)
+            response = self.session.get(f"{self.api_url}/version", timeout=2)
             return response.status_code == 200
-        except:
+        except requests.exceptions.RequestException:
             return False
 
     def tts_request(self, text, speaker_id):
-        """Gửi lệnh đọc tới VOICEVOX Engine."""
-        try:
-            # 1. Tạo audio query
-            query_payload = {"text": text, "speaker": speaker_id}
-            query_response = requests.post(f"{self.api_url}/audio_query", params=query_payload, timeout=10)
-            if query_response.status_code != 200:
-                raise Exception(f"Lỗi audio_query (Code {query_response.status_code}): {query_response.text}")
-            
-            audio_query = query_response.json()
+        """Gửi lệnh đọc tới VOICEVOX Engine với cơ chế retry và timeout dài hơn."""
+        max_retries = 3
 
-            # 2. Tổng hợp âm thanh (Retry mechanism)
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    synth_response = requests.post(f"{self.api_url}/synthesis", params={"speaker": speaker_id}, json=audio_query, timeout=60)
-                    if synth_response.status_code != 200:
-                        raise Exception(f"Lỗi synthesis (Code {synth_response.status_code}): {synth_response.text}")
-                    return synth_response.content
-                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                    if attempt < max_retries - 1:
-                        time.sleep(2)
-                        continue
-                    else:
-                        raise e
-                except Exception as e:
-                    raise e
-        except Exception as e:
-            raise e
+        # 1. Tạo audio query với retry
+        audio_query = None
+        for attempt in range(max_retries):
+            try:
+                query_payload = {"text": text, "speaker": speaker_id}
+                # Yêu cầu 1: Tăng timeout. Dùng session theo yêu cầu 3.
+                query_response = self.session.post(
+                    f"{self.api_url}/audio_query",
+                    params=query_payload,
+                    timeout=60
+                )
+                query_response.raise_for_status()  # Tự động raise lỗi nếu status code là 4xx hoặc 5xx
+                audio_query = query_response.json()
+                break  # Thoát vòng lặp nếu thành công
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                # Yêu cầu 2: Log và thử lại
+                if attempt < max_retries - 1:
+                    print(f"Request timeout/lỗi (audio_query), đang thử lại lần {attempt + 1}/{max_retries}... Lỗi: {e}")
+                    time.sleep(2)
+                else:
+                    raise Exception(f"Lỗi audio_query sau {max_retries} lần thử: {e}")
+            except requests.exceptions.RequestException as e:
+                status_code = e.response.status_code if e.response is not None else "N/A"
+                raise Exception(f"Lỗi audio_query (Code {status_code}): {e}")
+
+        if audio_query is None:
+            raise Exception("Không thể tạo audio_query sau nhiều lần thử.")
+
+        # 2. Tổng hợp âm thanh với retry
+        for attempt in range(max_retries):
+            try:
+                synth_response = self.session.post(
+                    f"{self.api_url}/synthesis",
+                    params={"speaker": speaker_id},
+                    json=audio_query,
+                    timeout=60  # Đảm bảo timeout đủ dài
+                )
+                synth_response.raise_for_status()
+                return synth_response.content
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt < max_retries - 1:
+                    print(f"Request timeout/lỗi (synthesis), đang thử lại lần {attempt + 1}/{max_retries}... Lỗi: {e}")
+                    time.sleep(2)
+                else:
+                    raise Exception(f"Lỗi synthesis sau {max_retries} lần thử: {e}")
+            except requests.exceptions.RequestException as e:
+                status_code = e.response.status_code if e.response is not None else "N/A"
+                raise Exception(f"Lỗi synthesis (Code {status_code}): {e}")
+
+        raise Exception(f"Không thể tổng hợp âm thanh sau {max_retries} lần thử.")
 
     def process_srt(self, srt_path, output_path, speaker_id, format="wav", progress_callback=None):
         subs = pysrt.open(srt_path)
