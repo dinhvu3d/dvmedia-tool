@@ -180,13 +180,13 @@ class VoicevoxLogic:
         else:
             combined_audio.export(output_path, format="wav")
 
-    def process_txt(self, txt_path, output_path, speaker_id, format="wav", progress_callback=None):
+    def process_txt(self, txt_path, output_path, speaker_id, format="wav", progress_callback=None, pause_config=None):
         with open(txt_path, 'r', encoding='utf-8') as f:
             text = f.read()
 
-        # Tách câu dựa trên dấu câu tiếng Nhật: 。 (dấu chấm), ！ (cảm thán), ？ (hỏi), và ký tự xuống dòng \n
+        # Tách câu dựa trên dấu câu tiếng Nhật và tiếng Anh: 。、, . ! ? và xuống dòng
         # (?<=...) là lookbehind assertion để giữ lại dấu câu
-        sentences = [s.strip() for s in re.split(r'(?<=[。！？\n])', text) if s.strip()]
+        sentences = [s.strip() for s in re.split(r'(?<=[。！？\n,、.?!])', text) if s.strip()]
         
         combined_audio = AudioSegment.empty()
         total = len(sentences)
@@ -196,6 +196,22 @@ class VoicevoxLogic:
                 progress_callback(f"Đang xử lý câu {i+1}/{total}: {sentence[:30]}...", percent=round(((i+1)/total)*100))
 
             try:
+                # Logic chèn silence (Tương tự GSpeech)
+                if i > 0 and pause_config:
+                    prev_sentence = sentences[i-1]
+                    if prev_sentence:
+                        last_char = prev_sentence.strip()[-1]
+                        pause_ms = 0
+                        if last_char in [',', '、']:
+                            pause_ms = float(pause_config.get('comma', 0)) * 1000
+                        elif last_char in ['.', '。']:
+                            pause_ms = float(pause_config.get('period', 0)) * 1000
+                        elif last_char in ['!', '！', '?', '？']:
+                            pause_ms = float(pause_config.get('exclamation', 0)) * 1000
+                        
+                        if pause_ms > 0:
+                            combined_audio += AudioSegment.silent(duration=pause_ms)
+
                 audio_data = self.tts_request(sentence, speaker_id)
                 
                 # Rate limiting to prevent timeout/overload
@@ -877,6 +893,13 @@ if __name__ == "__main__":
                 logic = VoicevoxLogic()
                 speaker_id = params['speakerId'] # Frontend will send speakerId
                 
+                # NEW: Get pause config for JP Voice
+                pause_config = {
+                    'comma': params.get('pauseComma', 0),
+                    'period': params.get('pausePeriod', 0),
+                    'exclamation': params.get('pauseExclamation', 0)
+                }
+                
                 electron_log(f"Bắt đầu xử lý JP VOICE: {input_path.name}")
 
                 if input_path.suffix.lower() == ".srt":
@@ -887,7 +910,8 @@ if __name__ == "__main__":
                 else: # TXT file
                     logic.process_txt(
                         str(input_path), str(output_file), speaker_id,
-                        format=out_format, progress_callback=electron_log
+                        format=out_format, progress_callback=electron_log,
+                        pause_config=pause_config
                     )
 
             # --- FISH SPEECH TASK ---
