@@ -85,7 +85,7 @@ class VoicevoxLogic:
         except:
             return False
 
-    def tts_request(self, text, speaker_id):
+    def tts_request(self, text, speaker_id, speed=1.0, pitch=0.0):
         """Gửi lệnh đọc tới VOICEVOX Engine."""
         try:
             # 1. Tạo audio query
@@ -95,6 +95,10 @@ class VoicevoxLogic:
                 raise Exception(f"Lỗi audio_query (Code {query_response.status_code}): {query_response.text}")
             
             audio_query = query_response.json()
+
+            # Thêm Speed và Pitch vào audio_query
+            audio_query['speedScale'] = speed
+            audio_query['pitchScale'] = pitch
 
             # 2. Tổng hợp âm thanh (Retry mechanism)
             max_retries = 3
@@ -115,7 +119,7 @@ class VoicevoxLogic:
         except Exception as e:
             raise e
 
-    def process_srt(self, srt_path, output_path, speaker_id, format="wav", progress_callback=None):
+    def process_srt(self, srt_path, output_path, speaker_id, speed=1.0, pitch=0.0, format="wav", progress_callback=None):
         subs = pysrt.open(srt_path)
         combined_audio = AudioSegment.silent(duration=0)
         
@@ -132,7 +136,7 @@ class VoicevoxLogic:
                 progress_callback(f"Đang xử lý dòng {i+1}/{len(subs)}: {text[:30]}...", percent=round(((i+1)/len(subs))*100))
 
             try:
-                audio_data = self.tts_request(text, speaker_id)
+                audio_data = self.tts_request(text, speaker_id, speed, pitch)
                 
                 temp_file = f"temp_voicevox_{i}.wav"
                 with open(temp_file, "wb") as f:
@@ -156,7 +160,7 @@ class VoicevoxLogic:
         else:
             combined_audio.export(output_path, format="wav")
 
-    def process_txt(self, txt_path, output_path, speaker_id, format="wav", progress_callback=None):
+    def process_txt(self, txt_path, output_path, speaker_id, speed=1.0, pitch=0.0, format="wav", progress_callback=None):
         with open(txt_path, 'r', encoding='utf-8') as f:
             text = f.read()
 
@@ -172,7 +176,7 @@ class VoicevoxLogic:
                 progress_callback(f"Đang xử lý câu {i+1}/{total}: {sentence[:30]}...", percent=round(((i+1)/total)*100))
 
             try:
-                audio_data = self.tts_request(sentence, speaker_id)
+                audio_data = self.tts_request(sentence, speaker_id, speed, pitch)
                 
                 # Rate limiting to prevent timeout/overload
                 time.sleep(0.2)
@@ -796,17 +800,21 @@ if __name__ == "__main__":
             if task == 'jp-voice':
                 logic = VoicevoxLogic()
                 speaker_id = params['speakerId'] # Frontend will send speakerId
+                speed = params.get('speed', 1.0)
+                pitch = params.get('pitch', 0.0)
                 
-                electron_log(f"Bắt đầu xử lý JP VOICE: {input_path.name}")
+                electron_log(f"Bắt đầu xử lý JP VOICE: {input_path.name} (Speed: {speed}, Pitch: {pitch})")
 
                 if input_path.suffix.lower() == ".srt":
                     logic.process_srt(
                         str(input_path), str(output_file), speaker_id,
+                        speed=speed, pitch=pitch,
                         format=out_format, progress_callback=electron_log
                     )
                 else: # TXT file
                     logic.process_txt(
                         str(input_path), str(output_file), speaker_id,
+                        speed=speed, pitch=pitch,
                         format=out_format, progress_callback=electron_log
                     )
 

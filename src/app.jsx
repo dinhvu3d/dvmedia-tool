@@ -941,17 +941,26 @@ const JPVoiceTab = () => {
     const [config, setConfig] = useState(() => {
         try {
             const saved = localStorage.getItem('jp_voice_config');
-            return saved ? JSON.parse(saved) : {
+            const defaultConfig = {
                 enginePath: '',
                 speakerId: '1', // Default to a common ID
                 styleId: '1', // This will be the actual ID sent to the API
                 inputPath: '',
                 outputFolder: '',
                 format: 'wav',
-                outputFilename: ''
+                outputFilename: '',
+                speed: 1.0,
+                pitch: 0.0
             };
+            return saved ? { ...defaultConfig, ...JSON.parse(saved) } : defaultConfig;
         } catch {
-            return { enginePath: '', speakerId: '1', styleId: '1', inputPath: '', outputFolder: '', format: 'wav', outputFilename: '' };
+            return {
+                enginePath: '', speakerId: '1', styleId: '1',
+                inputPath: '', outputFolder: '', format: 'wav',
+                outputFilename: '',
+                speed: 1.0,
+                pitch: 0.0
+            };
         }
     });
 
@@ -1085,6 +1094,28 @@ const JPVoiceTab = () => {
                             <select value={config.styleId} onChange={e => setConfig({...config, styleId: e.target.value})} className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none cursor-pointer">
                                 {styles.map(st => <option key={st.id} value={st.id}>{st.name} (ID: {st.id})</option>)}
                             </select>
+                        </div>
+                    </div>
+
+                    {/* Speed & Pitch Inputs */}
+                    <div className="mt-4 border-t border-gray-600 pt-4 grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold uppercase font-mono mb-1">Speed</label>
+                            <input
+                                type="number" min="0.5" max="2.0" step="0.05"
+                                value={config.speed}
+                                onChange={e => setConfig({ ...config, speed: e.target.value === '' ? '' : parseFloat(e.target.value) })}
+                                className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none focus:border-orange-500 font-bold text-center"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-gray-500 text-[10px] font-bold uppercase font-mono mb-1">Pitch</label>
+                            <input
+                                type="number" min="-0.15" max="0.15" step="0.01"
+                                value={config.pitch}
+                                onChange={e => setConfig({ ...config, pitch: e.target.value === '' ? '' : parseFloat(e.target.value) })}
+                                className="w-full bg-[#15171e] border border-gray-600 text-white text-xs rounded p-2 outline-none focus:border-orange-500 font-bold text-center"
+                            />
                         </div>
                     </div>
                 </div>
